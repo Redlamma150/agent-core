@@ -123,7 +123,13 @@ describe("runner", () => {
     const task = tasks.create(1, "x");
     const q = fakeQuery([() => result(good(task.id))]);
     await new AgentRunner(db, tasks, q.fn).run({ taskId: task.id, role: "builder", model: "sonnet", prompt: "p", systemPrompt: "s", cwd: "/r", tools: ["Read", "Grep"] });
-    expect(q.calls[0]).toMatchObject({ tools: ["Read", "Grep"], settingSources: [] });
+    expect(q.calls[0]).toMatchObject({
+      tools: ["Read", "Grep"],
+      settingSources: [],
+      strictMcpConfig: true,
+      mcpServers: {},
+      settings: { disableClaudeAiConnectors: true },
+    });
   });
 
   it("falls back to parsing the result text when there is no structured output", async () => {

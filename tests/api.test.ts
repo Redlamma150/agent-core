@@ -9,9 +9,19 @@ import { PushService } from "../src/api/push.js";
 
 export function services(db: ReturnType<typeof openDb>, bus?: EventBus) {
   const tasks = new TaskService(db, bus);
+  const approvals = new ApprovalService(db, tasks, { reminderMinutes: 10, reminderCount: 2 }, bus);
+  // Stand-in for the pipeline: the API tests care about HTTP behaviour, not about running agents.
+  const started: number[] = [];
+  const driver = {
+    start: (id: number) => void started.push(id),
+    stop: (id: number) => tasks.stop(id),
+    resolveApproval: async (id: number, approve: boolean, note?: string) => approvals.resolve(id, approve, note),
+  };
   return {
     tasks,
-    approvals: new ApprovalService(db, tasks, { reminderMinutes: 10, reminderCount: 2 }, bus),
+    approvals,
+    driver,
+    started,
     push: new PushService(db, async () => {}, () => {}),
     vapidPublicKey: "PUBKEY",
   };

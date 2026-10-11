@@ -29,6 +29,7 @@ export interface Task {
   description: string;
   status: TaskStatus;
   branch: string | null;
+  base_branch: string | null;
   tokens_used: number;
   failures: number;
   escalations: number;
@@ -37,7 +38,7 @@ export interface Task {
   updated_at: string;
 }
 
-const TASK_COLS = "id, project_id, description, status, branch, tokens_used, failures, escalations, flagged, created_at, updated_at";
+const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, created_at, updated_at";
 
 export class TaskService {
   constructor(private db: Db, private bus?: EventBus) {}
@@ -87,6 +88,10 @@ export class TaskService {
     return this.db
       .prepare(`SELECT ${TASK_COLS} FROM tasks WHERE status IN ('received','planning','in_progress') ORDER BY id`)
       .all() as Task[];
+  }
+
+  setBranch(id: number, branch: string, base: string): void {
+    this.db.prepare("UPDATE tasks SET branch = ?, base_branch = ? WHERE id = ?").run(branch, base, id);
   }
 
   /** Counts one more consecutive failure and returns the new count. */

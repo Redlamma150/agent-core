@@ -3,7 +3,12 @@ import { startServers } from "./api/server.js";
 import { EventBus } from "./api/events.js";
 import { attachPush, createWebPushSender, PushService } from "./api/push.js";
 import { loadConfig } from "./config.js";
+import { AgentRunner } from "./agents/runner.js";
 import { ApprovalService } from "./core/approvals.js";
+import { BudgetService } from "./core/budget.js";
+import { GitService } from "./core/git.js";
+import { Pipeline } from "./core/pipeline.js";
+import { dirname, join } from "node:path";
 import { TaskService } from "./core/tasks.js";
 import { openDb } from "./db/index.js";
 
@@ -19,10 +24,12 @@ const push = new PushService(
 );
 attachPush(bus, push);
 
-const resumable = tasks.resumable();
-if (resumable.length > 0) console.log(`resuming ${resumable.length} unfinished task(s): ${resumable.map((t) => `#${t.id} (${t.status})`).join(", ")}`);
+const budget = new BudgetService(tasks, config.TASK_TOKEN_CAP, bus);
+const pipeline = new Pipeline({ db, tasks, approvals, runner: new AgentRunner(db, tasks), budget, git: new GitService(join(dirname(config.DB_PATH), "worktrees")) });
+const resumed = pipeline.resume();
+if (resumed > 0) console.log(`resuming ${resumed} unfinished task(s)`);
 
-const servers = await startServers({ db, accessToken: config.APP_ACCESS_TOKEN, tasks, approvals, push, vapidPublicKey: config.VAPID_PUBLIC_KEY, staticDir: config.STATIC_DIR, bus, logger: true }, config.API_BIND_HOSTS, config.API_PORT);
+const servers = await startServers({ db, accessToken: config.APP_ACCESS_TOKEN, tasks, approvals, driver: pipeline, push, vapidPublicKey: config.VAPID_PUBLIC_KEY, staticDir: config.STATIC_DIR, bus, logger: true }, config.API_BIND_HOSTS, config.API_PORT);
 
 // Reminders are published on the bus: SSE clients see them live and attachPush forwards them as Web Push.
 const reminderTimer = setInterval(() => {
