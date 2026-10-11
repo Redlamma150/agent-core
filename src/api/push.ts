@@ -64,12 +64,15 @@ export class PushService {
 
 /** Notification texts carry no task content: the app shows details after the owner opens it. */
 export function notificationFor(event: CoreEvent): PushPayload | null {
-  const d = event.data as { task_id?: number; status?: string; number?: number };
+  const d = event.data as { task_id?: number; status?: string; number?: number; percent?: number };
   if (event.type === "approval" && d.status === "pending") {
     return { title: "בקשת אישור חדשה", body: `משימה #${d.task_id} ממתינה לאישור שלך`, url: "/#/approvals" };
   }
   if (event.type === "reminder") {
     return { title: "תזכורת לאישור", body: `משימה #${d.task_id} עדיין ממתינה לאישור (תזכורת ${d.number})`, url: "/#/approvals" };
+  }
+  if (event.type === "budget") {
+    return { title: "תקרת טוקנים", body: `משימה #${d.task_id} הגיעה ל-${d.percent}% מתקרת הטוקנים`, url: `/#/tasks/${d.task_id}` };
   }
   return null;
 }

@@ -30,15 +30,20 @@ export interface Task {
   status: TaskStatus;
   branch: string | null;
   tokens_used: number;
+  failures: number;
+  escalations: number;
+  flagged: number;
   created_at: string;
   updated_at: string;
 }
 
+const TASK_COLS = "id, project_id, description, status, branch, tokens_used, failures, escalations, flagged, created_at, updated_at";
+
 export class TaskService {
   constructor(private db: Db, private bus?: EventBus) {}
 
-  create(projectId: number, description: string): Task {
-    const info = this.db.prepare("INSERT INTO tasks (project_id, description) VALUES (?, ?)").run(projectId, description);
+  create(projectId: number, description: string, flagged = false): Task {
+    const info = this.db.prepare("INSERT INTO tasks (project_id, description, flagged) VALUES (?, ?, ?)").run(projectId, description, flagged ? 1 : 0);
     const id = Number(info.lastInsertRowid);
     this.db.prepare("INSERT INTO steps (task_id, agent, status, to_status, summary) VALUES (?, 'system', 'done', 'received', 'task created')").run(id);
     const task = this.get(id);
@@ -47,7 +52,7 @@ export class TaskService {
   }
 
   get(id: number): Task {
-    const t = this.db.prepare("SELECT id, project_id, description, status, branch, tokens_used, created_at, updated_at FROM tasks WHERE id = ?").get(id) as Task | undefined;
+    const t = this.db.prepare(`SELECT ${TASK_COLS} FROM tasks WHERE id = ?`).get(id) as Task | undefined;
     if (!t) throw new NotFoundError(`Task ${id} not found`);
     return t;
   }
@@ -80,7 +85,37 @@ export class TaskService {
   /** Tasks that were mid-flight and should be picked up again after a restart. */
   resumable(): Task[] {
     return this.db
-      .prepare("SELECT id, project_id, description, status, branch, tokens_used, created_at, updated_at FROM tasks WHERE status IN ('received','planning','in_progress') ORDER BY id")
+      .prepare(`SELECT ${TASK_COLS} FROM tasks WHERE status IN ('received','planning','in_progress') ORDER BY id`)
       .all() as Task[];
+  }
+
+  /** Counts one more consecutive failure and returns the new count. */
+  recordFailure(id: number): number {
+    this.db.prepare("UPDATE tasks SET failures = failures + 1, updated_at = datetime('now') WHERE id = ?").run(id);
+    return this.get(id).failures;
+  }
+
+  resetFailures(id: number): void {
+    this.db.prepare("UPDATE tasks SET failures = 0 WHERE id = ?").run(id);
+  }
+
+  /** An escalation starts the task fresh on the stronger model, so the consecutive-failure count restarts. */
+  recordEscalation(id: number): number {
+    this.db.prepare("UPDATE tasks SET escalations = escalations + 1, failures = 0 WHERE id = ?").run(id);
+    return this.get(id).escalations;
+  }
+
+  addTokens(id: number, tokens: number): number {
+    this.db.prepare("UPDATE tasks SET tokens_used = tokens_used + ? WHERE id = ?").run(tokens, id);
+    return this.get(id).tokens_used;
+  }
+
+  /** Writes a non-transition audit line (escalation, budget warning) to the task's step log. */
+  note(id: number, status: string, summary: string): void {
+    this.db.prepare("INSERT INTO steps (task_id, agent, status, summary) VALUES (?, 'system', ?, ?)").run(id, status, summary);
+  }
+
+  hasNote(id: number, status: string): boolean {
+    return this.db.prepare("SELECT 1 FROM steps WHERE task_id = ? AND status = ? LIMIT 1").get(id, status) !== undefined;
   }
 }

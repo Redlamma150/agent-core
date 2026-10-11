@@ -14,5 +14,11 @@ export function openDb(path: string): Db {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(readFileSync(schemaPath, "utf8"));
+  ensureColumn(db, "tasks", "flagged", "INTEGER NOT NULL DEFAULT 0"); // added in M5; CREATE IF NOT EXISTS skips existing tables
   return db;
+}
+
+function ensureColumn(db: Db, table: string, column: string, ddl: string): void {
+  const cols = db.pragma(`table_info(${table})`) as { name: string }[];
+  if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
 }

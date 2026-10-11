@@ -93,6 +93,13 @@ describe("task and approval routes", () => {
     expect((await post(app, "/tasks/999/stop", {})).statusCode).toBe(404);
   });
 
+  it("stores the flagged marker for escalation", async () => {
+    const { app } = setup();
+    const created = await post(app, "/tasks", { project_id: 1, description: "touches auth", flagged: true });
+    expect(created.json()).toMatchObject({ flagged: 1 });
+    expect((await post(app, "/tasks", { project_id: 1, description: "x", flagged: "yes" })).statusCode).toBe(400);
+  });
+
   it("validates the create body and the project", async () => {
     const { app } = setup();
     expect((await post(app, "/tasks", { description: "x" })).statusCode).toBe(400);

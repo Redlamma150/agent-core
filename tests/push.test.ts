@@ -47,6 +47,14 @@ describe("notifications", () => {
     expect(notificationFor({ type: "reminder", data: { approval_id: 1, task_id: 7, number: 2 } })?.title).toBe("תזכורת לאישור");
   });
 
+  it("warns about the token cap in Hebrew with a link to the task", () => {
+    expect(notificationFor({ type: "budget", data: { task_id: 4, percent: 80 } })).toEqual({
+      title: "תקרת טוקנים",
+      body: "משימה #4 הגיעה ל-80% מתקרת הטוקנים",
+      url: "/#/tasks/4",
+    });
+  });
+
   it("ignores everything else", () => {
     expect(notificationFor({ type: "approval", data: { id: 1, task_id: 7, status: "approved" } })).toBeNull();
     expect(notificationFor({ type: "task", data: { id: 7, status: "planning" } })).toBeNull();
