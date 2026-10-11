@@ -7,9 +7,9 @@ import { InvalidTransitionError, NotFoundError, type TaskService } from "../core
 const notImplemented = (reply: FastifyReply, milestone: string) =>
   reply.code(501).send({ error: "not_implemented", milestone });
 
-const TASK_COLUMNS = "id, project_id, description, status, branch, tokens_used, created_at, updated_at";
+const TASK_COLUMNS = "id, project_id, description, status, branch, tokens_used, flagged, created_at, updated_at";
 
-const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000) });
+const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional() });
 const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z.string().max(5000).optional() });
 
 export interface Services {
@@ -33,7 +33,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, approvals 
   app.post("/tasks", async (req, reply) => {
     const body = createTaskBody.parse(req.body);
     if (!db.prepare("SELECT 1 FROM projects WHERE id = ?").get(body.project_id)) return reply.code(404).send({ error: "project_not_found" });
-    return reply.code(201).send(tasks.create(body.project_id, body.description));
+    return reply.code(201).send(tasks.create(body.project_id, body.description, body.flagged));
   });
 
   app.get<{ Params: { id: string } }>("/tasks/:id", async (req, reply) => {
