@@ -3,6 +3,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildApp, startServers } from "../src/api/server.js";
 import { EventBus } from "../src/api/events.js";
 import { openDb } from "../src/db/index.js";
+import { ApprovalService } from "../src/core/approvals.js";
+import { TaskService } from "../src/core/tasks.js";
+
+export function services(db: ReturnType<typeof openDb>, bus?: EventBus) {
+  const tasks = new TaskService(db, bus);
+  return { tasks, approvals: new ApprovalService(db, tasks, { reminderMinutes: 10, reminderCount: 2 }, bus) };
+}
 
 const TOKEN = "t".repeat(40);
 const auth = { authorization: `Bearer ${TOKEN}` };
@@ -11,7 +18,7 @@ function setup() {
   const db = openDb(":memory:");
   db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p', '/r')").run();
   db.prepare("INSERT INTO tasks (project_id, description) VALUES (1, 'first')").run();
-  return { db, app: buildApp({ db, accessToken: TOKEN }) };
+  return { db, app: buildApp({ db, accessToken: TOKEN, ...services(db) }) };
 }
 
 describe("auth", () => {
@@ -55,9 +62,6 @@ describe("routes", () => {
   });
 
   it.each([
-    ["POST", "/tasks", "M3"],
-    ["POST", "/tasks/1/stop", "M3"],
-    ["POST", "/approvals/1", "M3"],
     ["GET", "/projects/active", "M6"],
     ["POST", "/projects/active", "M6"],
     ["POST", "/chat", "M5"],
@@ -66,6 +70,42 @@ describe("routes", () => {
     const res = await app.inject({ method, url, headers: auth });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ error: "not_implemented", milestone });
+  });
+});
+
+describe("task and approval routes", () => {
+  const post = (app: ReturnType<typeof setup>["app"], url: string, payload: unknown) =>
+    app.inject({ method: "POST", url, headers: auth, payload: payload as object });
+
+  it("creates a task, stops it, and refuses to stop it twice", async () => {
+    const { app } = setup();
+    const created = await post(app, "/tasks", { project_id: 1, description: "do it" });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id;
+    expect((await post(app, `/tasks/${id}/stop`, {})).json()).toMatchObject({ id, status: "stopped" });
+    expect((await post(app, `/tasks/${id}/stop`, {})).statusCode).toBe(409);
+    expect((await post(app, "/tasks/999/stop", {})).statusCode).toBe(404);
+  });
+
+  it("validates the create body and the project", async () => {
+    const { app } = setup();
+    expect((await post(app, "/tasks", { description: "x" })).statusCode).toBe(400);
+    expect((await post(app, "/tasks", { project_id: 1, description: "  " })).statusCode).toBe(400);
+    expect((await post(app, "/tasks", { project_id: 42, description: "x" })).statusCode).toBe(404);
+  });
+
+  it("approves and rejects through /approvals/:id", async () => {
+    const { db, app } = setup();
+    const { tasks, approvals } = services(db);
+    tasks.transition(1, "planning");
+    const a = approvals.request(1, "merge?");
+    expect((await app.inject({ url: "/approvals", headers: auth })).json()).toHaveLength(1);
+
+    expect((await post(app, `/approvals/${a.id}`, { decision: "maybe" })).statusCode).toBe(400);
+    const rejected = await post(app, `/approvals/${a.id}`, { decision: "reject", note: "again" });
+    expect(rejected.json()).toMatchObject({ status: "rejected", notes: "again" });
+    expect((await post(app, `/approvals/${a.id}`, { decision: "approve" })).statusCode).toBe(409);
+    expect((await post(app, "/approvals/999", { decision: "approve" })).statusCode).toBe(404);
   });
 });
 
@@ -78,7 +118,8 @@ describe("listening", () => {
 
   it("serves SSE events over a real socket", async () => {
     const bus = new EventBus();
-    servers = await startServers({ db: openDb(":memory:"), accessToken: TOKEN, bus }, ["127.0.0.1"], 0);
+    let db: ReturnType<typeof openDb>;
+    servers = await startServers({ db: (db = openDb(":memory:")), accessToken: TOKEN, ...services(db, bus), bus }, ["127.0.0.1"], 0);
     const addr = servers[0]!.server.address() as { port: number };
     const res = await fetch(`http://127.0.0.1:${addr.port}/events`, { headers: auth });
     expect(res.status).toBe(200);
@@ -92,7 +133,8 @@ describe("listening", () => {
   });
 
   it("does not answer on an address outside the bind list", async () => {
-    servers = await startServers({ db: openDb(":memory:"), accessToken: TOKEN }, ["127.0.0.1"], 0);
+    const db = openDb(":memory:");
+    servers = await startServers({ db, accessToken: TOKEN, ...services(db) }, ["127.0.0.1"], 0);
     const port = (servers[0]!.server.address() as { port: number }).port;
     const ok = await fetch(`http://127.0.0.1:${port}/usage`, { headers: auth });
     expect(ok.status).toBe(200);
