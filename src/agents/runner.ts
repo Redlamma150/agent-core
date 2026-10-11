@@ -1,4 +1,4 @@
-import type { Options, PermissionMode, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, PermissionMode, SDKMessage, SDKResultMessage, SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Db } from "../db/index.js";
 import type { TaskService } from "../core/tasks.js";
 import { handoffJsonSchema, parseHandoff, type AgentRole, type Handoff } from "./contract.js";
@@ -12,7 +12,14 @@ export interface RunRequest {
   prompt: string;
   systemPrompt: string;
   cwd: string;
+  /**
+   * The built-in tools the agent gets (e.g. ["Read", "Grep", "Glob"]). Every tool adds to the prompt the model
+   * reads on each call, so give each role only what it needs. Omit for the full default set; [] for no tools.
+   */
+  tools?: string[];
   allowedTools?: string[];
+  /** Settings files to load. Default none: cheaper, and the agent does not pick up personal settings. */
+  settingSources?: SettingSource[];
   permissionMode?: PermissionMode;
   maxTurns?: number;
   /** True when this call is the first one after an escalation; recorded in llm_calls. */
@@ -48,11 +55,12 @@ export class AgentRunner {
         model: req.model,
         systemPrompt: req.systemPrompt,
         cwd: req.cwd,
+        tools: req.tools,
         allowedTools: req.allowedTools,
         permissionMode: req.permissionMode,
         maxTurns: req.maxTurns ?? 30,
         outputFormat: { type: "json_schema", schema: handoffJsonSchema },
-        settingSources: ["project"],
+        settingSources: req.settingSources ?? [],
         abortController: abort,
         // Agents must run on the Claude subscription: never hand the SDK an API key, even if one leaks into the environment.
         env: { ...process.env, ANTHROPIC_API_KEY: undefined },

@@ -116,6 +116,16 @@ describe("runner", () => {
     }
   });
 
+  it("passes the role's tool list through and loads no settings by default", async () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p','/r')").run();
+    const tasks = new TaskService(db);
+    const task = tasks.create(1, "x");
+    const q = fakeQuery([() => result(good(task.id))]);
+    await new AgentRunner(db, tasks, q.fn).run({ taskId: task.id, role: "builder", model: "sonnet", prompt: "p", systemPrompt: "s", cwd: "/r", tools: ["Read", "Grep"] });
+    expect(q.calls[0]).toMatchObject({ tools: ["Read", "Grep"], settingSources: [] });
+  });
+
   it("falls back to parsing the result text when there is no structured output", async () => {
     const t = setup([() => result(undefined, 10, { result: JSON.stringify(good(1)) })]);
     expect((await t.run()).kind).toBe("completed");
