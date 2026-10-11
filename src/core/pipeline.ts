@@ -1,3 +1,5 @@
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { executeAgent } from "../agents/execute.js";
 import type { Handoff } from "../agents/contract.js";
 import type { AgentRunner } from "../agents/runner.js";
@@ -12,6 +14,7 @@ interface ProjectRow {
   id: number;
   name: string;
   repo_path: string;
+  context_file: string | null;
 }
 
 /** What the API needs from the pipeline. */
@@ -106,7 +109,7 @@ export class Pipeline implements TaskDriver {
       taskId: task.id,
       role: "planner",
       systemPrompt: loadTemplate("planner"),
-      prompt: `Task ${task.id}: ${task.description}\n\nThe project "${project.name}" is your current directory. Plan this task.`,
+      prompt: `Task ${task.id}: ${task.description}\n\nThe project "${project.name}" is your current directory. Plan this task.${projectContext(project)}`,
       cwd: project.repo_path,
       tools: PLANNER_TOOLS,
       allowedTools: PLANNER_TOOLS,
@@ -131,6 +134,8 @@ export class Pipeline implements TaskDriver {
     if (plan) parts.push(`Plan from the planner:\n${plan.summary}\nSteps:\n${plan.open_items.map((s, i) => `${i + 1}. ${s}`).join("\n")}`);
     if (notes) parts.push(`The owner rejected the previous attempt with these notes. Address all of them:\n${notes}`);
     parts.push("Your current directory is the task's git worktree. Implement the task there.");
+    const context = projectContext(project);
+    if (context) parts.push(context.trim());
 
     const out = await executeAgent(this.d, {
       taskId: task.id,
@@ -162,7 +167,7 @@ export class Pipeline implements TaskDriver {
   }
 
   private project(task: Task): ProjectRow {
-    const p = this.d.db.prepare("SELECT id, name, repo_path FROM projects WHERE id = ?").get(task.project_id) as ProjectRow | undefined;
+    const p = this.d.db.prepare("SELECT id, name, repo_path, context_file FROM projects WHERE id = ?").get(task.project_id) as ProjectRow | undefined;
     if (!p) throw new Error(`project ${task.project_id} not found`);
     return p;
   }
@@ -188,4 +193,19 @@ export class Pipeline implements TaskDriver {
       // the task vanished or is already final: nothing more to record
     }
   }
+}
+
+const MAX_CONTEXT_CHARS = 20_000;
+
+/**
+ * The project's imported context file (decisions, rules for agents), read from the owner's checkout so it
+ * reaches the agents even when the file is not committed yet. Must live inside the repository.
+ */
+export function projectContext(project: { repo_path: string; context_file: string | null }): string {
+  if (!project.context_file) return "";
+  const root = resolve(project.repo_path);
+  const file = resolve(root, project.context_file);
+  if (!file.startsWith(root + sep) || !existsSync(file) || !statSync(file).isFile()) return "";
+  const text = readFileSync(file, "utf8").slice(0, MAX_CONTEXT_CHARS);
+  return `\n\nProject context (${project.context_file}). Follow its rules:\n---\n${text}\n---`;
 }

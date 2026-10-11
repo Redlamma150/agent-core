@@ -31,6 +31,9 @@ export class GitService {
     const git = simpleGit(repoPath);
     if (!(await git.checkIsRepo())) throw new Error(`${repoPath} is not a git repository`);
     const branch = `task-${taskId}`;
+    if (!(await git.raw(["rev-list", "-n", "1", "--all"]).catch(() => "")).trim()) {
+      throw new Error(`${repoPath} has no commits yet: make an initial commit before running tasks on it`);
+    }
     const base = knownBase ?? (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
     if (base === "HEAD") throw new Error("repository is in detached HEAD state; check out a branch first");
     const worktree = this.worktreePath(repoPath, taskId);

@@ -102,6 +102,15 @@ describe("pipeline", () => {
     expect(existsSync(join(t.repo, "first.txt")) && existsSync(join(t.repo, "second.txt"))).toBe(true);
   });
 
+  it("hands the project's context file to both agents", async () => {
+    const t = await setup();
+    writeFileSync(join(t.repo, "CONTEXT.md"), "RULE: never name employers");
+    t.db.prepare("UPDATE projects SET context_file = 'CONTEXT.md'").run();
+    t.pipeline.start(t.task.id);
+    await t.pipeline.idle();
+    for (const call of t.calls) expect(call.prompt).toContain("RULE: never name employers");
+  });
+
   it("blocks when the planner cannot plan, without running the builder", async () => {
     const t = await setup({ planner: () => handoff(1, "planner", { status: "blocked", summary: "חסר מידע" }) });
     t.pipeline.start(t.task.id);

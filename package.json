@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit",
     "app:install": "npm --prefix app install",
     "app:build": "npm --prefix app run build",
-    "app:dev": "npm --prefix app run dev"
+    "app:dev": "npm --prefix app run dev",
+    "project:add": "tsx src/cli/add-project.ts",
+    "init-env": "node scripts/init-env.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.296",
