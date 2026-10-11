@@ -2,16 +2,16 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { Db } from "../db/index.js";
 import { registerAuth } from "./auth.js";
 import { EventBus, registerEvents } from "./events.js";
-import { registerRoutes } from "./routes.js";
+import { registerRoutes, type Services } from "./routes.js";
 
-export interface ApiDeps {
+export interface ApiDeps extends Services {
   db: Db;
   accessToken: string;
   bus?: EventBus;
   logger?: boolean;
 }
 
-export function buildApp({ db, accessToken, bus = new EventBus(), logger = false }: ApiDeps): FastifyInstance {
+export function buildApp({ db, accessToken, tasks, approvals, bus = new EventBus(), logger = false }: ApiDeps): FastifyInstance {
   const app = Fastify({
     logger: logger
       ? {
@@ -23,7 +23,7 @@ export function buildApp({ db, accessToken, bus = new EventBus(), logger = false
   });
   registerAuth(app, accessToken);
   registerEvents(app, bus);
-  registerRoutes(app, db);
+  registerRoutes(app, db, { tasks, approvals });
   return app;
 }
 
