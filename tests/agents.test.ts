@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 import { EventBus } from "../src/api/events.js";
@@ -88,7 +89,7 @@ function setup(steps: (() => SDKMessage | Error)[], cap = 200000, flagged = fals
   const q = fakeQuery(steps);
   const runner = new AgentRunner(db, tasks, q.fn);
   const budget = new BudgetService(tasks, cap, bus);
-  const run = () => executeAgent({ tasks, runner, budget }, { taskId: task.id, role: "builder", prompt: "go", systemPrompt: "sys", cwd: "/r" });
+  const run = () => executeAgent({ tasks, runner, budget }, { taskId: task.id, role: "builder", prompt: "go", systemPrompt: "sys", cwd: tmpdir() });
   return { db, tasks, task, q, run, events };
 }
 
@@ -122,7 +123,7 @@ describe("runner", () => {
     const tasks = new TaskService(db);
     const task = tasks.create(1, "x");
     const q = fakeQuery([() => result(good(task.id))]);
-    await new AgentRunner(db, tasks, q.fn).run({ taskId: task.id, role: "builder", model: "sonnet", prompt: "p", systemPrompt: "s", cwd: "/r", tools: ["Read", "Grep"] });
+    await new AgentRunner(db, tasks, q.fn).run({ taskId: task.id, role: "builder", model: "sonnet", prompt: "p", systemPrompt: "s", cwd: tmpdir(), tools: ["Read", "Grep"] });
     expect(q.calls[0]).toMatchObject({
       tools: ["Read", "Grep"],
       settingSources: [],
@@ -130,6 +131,19 @@ describe("runner", () => {
       mcpServers: {},
       settings: { disableClaudeAiConnectors: true },
     });
+  });
+
+  it("fails clearly, without calling the SDK, when the working directory does not exist", async () => {
+    const t = setup([() => result(good(1))]);
+    const out = await new AgentRunner(t.db, t.tasks, t.q.fn).run({ taskId: t.task.id, role: "builder", model: "sonnet", prompt: "p", systemPrompt: "s", cwd: "/no/such/dir" });
+    expect(out).toMatchObject({ ok: false, reason: expect.stringContaining("working directory does not exist") });
+    expect(t.q.calls).toHaveLength(0);
+  });
+
+  it("records why an agent call failed in the task's step log", async () => {
+    const t = setup([() => new Error("boom"), () => result(good(1))]);
+    await t.run();
+    expect(t.db.prepare("SELECT summary FROM steps WHERE status = 'agent_error'").all()).toEqual([{ summary: "builder: agent call failed: boom" }]);
   });
 
   it("falls back to parsing the result text when there is no structured output", async () => {

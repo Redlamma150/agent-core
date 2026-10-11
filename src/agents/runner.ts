@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { Options, PermissionMode, SDKMessage, SDKResultMessage, SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Db } from "../db/index.js";
 import type { TaskService } from "../core/tasks.js";
@@ -51,6 +52,8 @@ export class AgentRunner {
     let result: SDKResultMessage | undefined;
     let outcome: { ok: true; handoff: Handoff } | { ok: false; reason: string };
     try {
+      // The SDK reports a missing working directory as "binary failed to launch", which sends people hunting in the wrong place.
+      if (!existsSync(req.cwd)) throw new Error(`working directory does not exist: ${req.cwd}`);
       const options: Options = {
         model: req.model,
         systemPrompt: req.systemPrompt,

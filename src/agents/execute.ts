@@ -45,6 +45,7 @@ export async function executeAgent(
     if (tasks.get(id).status === "stopped") return { kind: "stopped", reason: "stopped by owner" };
 
     if (!res.ok || res.handoff.status === "failed") {
+      tasks.note(id, "agent_error", res.ok ? `${req.role} reported failure: ${res.handoff.summary}` : `${req.role}: ${res.reason}`);
       tasks.recordFailure(id);
       continue;
     }

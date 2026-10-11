@@ -1,11 +1,25 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { simpleGit } from "simple-git";
 import { describe, expect, it } from "vitest";
-import { MergeError, SecretFileError } from "../src/core/git.js";
+import { GitService, MergeError, SecretFileError } from "../src/core/git.js";
 import { makeRepo } from "./repo-helper.js";
 
 describe("GitService", () => {
+  it("keeps worktrees out of the project repo even when given a relative directory", async () => {
+    const { repo } = await makeRepo();
+    const relative = new GitService("rel-worktrees"); // relative to the test process, not to the repo
+    const p = await relative.prepare(repo, 9);
+    try {
+      expect(isAbsolute(p.worktree)).toBe(true);
+      expect(p.worktree.startsWith(repo)).toBe(false);
+      expect(existsSync(p.worktree)).toBe(true);
+    } finally {
+      await relative.cleanup(repo, 9);
+      rmSync("rel-worktrees", { recursive: true, force: true });
+    }
+  });
+
   it("builds on a task branch in its own worktree and leaves the owner's checkout alone", async () => {
     const { repo, git } = await makeRepo();
     const p = await git.prepare(repo, 7);
