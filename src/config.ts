@@ -31,6 +31,7 @@ const schema = z.object({
   REMINDER_MINUTES: positiveInt("REMINDER_MINUTES").default(10),
   REMINDER_COUNT: positiveInt("REMINDER_COUNT").default(2),
   DB_PATH: required("DB_PATH").default("./data/core.db"),
+  STATIC_DIR: required("STATIC_DIR").default("./app/dist"),
 });
 
 export type Config = z.infer<typeof schema>;

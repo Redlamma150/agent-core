@@ -68,3 +68,10 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_steps_task ON steps(task_id);
 CREATE INDEX IF NOT EXISTS idx_approvals_task ON approvals(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_task ON llm_calls(task_id);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint   TEXT PRIMARY KEY,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
