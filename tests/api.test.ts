@@ -5,10 +5,16 @@ import { EventBus } from "../src/api/events.js";
 import { openDb } from "../src/db/index.js";
 import { ApprovalService } from "../src/core/approvals.js";
 import { TaskService } from "../src/core/tasks.js";
+import { PushService } from "../src/api/push.js";
 
 export function services(db: ReturnType<typeof openDb>, bus?: EventBus) {
   const tasks = new TaskService(db, bus);
-  return { tasks, approvals: new ApprovalService(db, tasks, { reminderMinutes: 10, reminderCount: 2 }, bus) };
+  return {
+    tasks,
+    approvals: new ApprovalService(db, tasks, { reminderMinutes: 10, reminderCount: 2 }, bus),
+    push: new PushService(db, async () => {}, () => {}),
+    vapidPublicKey: "PUBKEY",
+  };
 }
 
 const TOKEN = "t".repeat(40);
@@ -41,9 +47,9 @@ describe("auth", () => {
     }
   });
 
-  it("rejects unknown paths without a token with 401, not 404", async () => {
+  it("gives unknown paths a plain 404 that reveals nothing", async () => {
     const { app } = setup();
-    expect((await app.inject({ method: "GET", url: "/nope" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/nope" })).statusCode).toBe(404);
   });
 });
 
