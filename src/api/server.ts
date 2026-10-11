@@ -19,7 +19,7 @@ export interface ApiDeps extends Services {
   logger?: boolean;
 }
 
-export function buildApp({ db, accessToken, tasks, approvals, push, vapidPublicKey, staticDir, bus = new EventBus(), logger = false }: ApiDeps): FastifyInstance {
+export function buildApp({ db, accessToken, tasks, approvals, driver, push, vapidPublicKey, staticDir, bus = new EventBus(), logger = false }: ApiDeps): FastifyInstance {
   const app = Fastify({
     logger: logger
       ? {
@@ -34,7 +34,7 @@ export function buildApp({ db, accessToken, tasks, approvals, push, vapidPublicK
   app.register(async (api) => {
     registerAuth(api, accessToken);
     registerEvents(api, bus);
-    registerRoutes(api, db, { tasks, approvals });
+    registerRoutes(api, db, { tasks, approvals, driver });
     registerPush(api, push, vapidPublicKey);
   });
 

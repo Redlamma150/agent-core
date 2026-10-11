@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import type { Db } from "../db/index.js";
 import { AlreadyResolvedError, type ApprovalService } from "../core/approvals.js";
+import { MergeError } from "../core/git.js";
+import type { TaskDriver } from "../core/pipeline.js";
 import { InvalidTransitionError, NotFoundError, type TaskService } from "../core/tasks.js";
 
 const notImplemented = (reply: FastifyReply, milestone: string) =>
@@ -15,11 +17,13 @@ const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z
 export interface Services {
   tasks: TaskService;
   approvals: ApprovalService;
+  driver: TaskDriver;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, approvals }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
+    if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message });
     if (err instanceof InvalidTransitionError || err instanceof AlreadyResolvedError) return reply.code(409).send({ error: "conflict", message: err.message });
     if (err instanceof z.ZodError) return reply.code(400).send({ error: "invalid_body", issues: err.issues.map((i) => i.message) });
     if (err instanceof Error && "statusCode" in err && typeof err.statusCode === "number" && err.statusCode < 500) {
@@ -33,7 +37,9 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, approvals 
   app.post("/tasks", async (req, reply) => {
     const body = createTaskBody.parse(req.body);
     if (!db.prepare("SELECT 1 FROM projects WHERE id = ?").get(body.project_id)) return reply.code(404).send({ error: "project_not_found" });
-    return reply.code(201).send(tasks.create(body.project_id, body.description, body.flagged));
+    const task = tasks.create(body.project_id, body.description, body.flagged);
+    driver.start(task.id);
+    return reply.code(201).send(task);
   });
 
   app.get<{ Params: { id: string } }>("/tasks/:id", async (req, reply) => {
@@ -44,7 +50,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, approvals 
   });
   app.post<{ Params: { id: string } }>("/tasks/:id/stop", async (req, reply) => {
     if (!/^\d+$/.test(req.params.id)) return reply.code(400).send({ error: "invalid_id" });
-    return tasks.stop(Number(req.params.id));
+    return driver.stop(Number(req.params.id));
   });
 
   app.get("/approvals", async () =>
@@ -53,7 +59,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, approvals 
   app.post<{ Params: { id: string } }>("/approvals/:id", async (req, reply) => {
     if (!/^\d+$/.test(req.params.id)) return reply.code(400).send({ error: "invalid_id" });
     const body = decisionBody.parse(req.body);
-    return approvals.resolve(Number(req.params.id), body.decision === "approve", body.note);
+    return driver.resolveApproval(Number(req.params.id), body.decision === "approve", body.note);
   });
 
   app.get("/projects/active", async (_req, reply) => notImplemented(reply, "M6"));

@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   status        TEXT NOT NULL DEFAULT 'received'
                 CHECK (status IN ('received','planning','in_progress','awaiting_approval','merged','blocked','stopped')),
   branch        TEXT,
+  base_branch   TEXT,
   failures      INTEGER NOT NULL DEFAULT 0,
   escalations   INTEGER NOT NULL DEFAULT 0,
   tokens_used   INTEGER NOT NULL DEFAULT 0,

@@ -61,6 +61,11 @@ export class AgentRunner {
         maxTurns: req.maxTurns ?? 30,
         outputFormat: { type: "json_schema", schema: handoffJsonSchema },
         settingSources: req.settingSources ?? [],
+        // Agents get no MCP servers and none of the account's claude.ai connectors. Left on, the connectors were loaded
+        // as soon as an agent used a tool and grew a 3.5K-token context to ~120K, and they are tools agents must not have.
+        strictMcpConfig: true,
+        mcpServers: {},
+        settings: { disableClaudeAiConnectors: true },
         abortController: abort,
         // Agents must run on the Claude subscription: never hand the SDK an API key, even if one leaks into the environment.
         env: { ...process.env, ANTHROPIC_API_KEY: undefined },

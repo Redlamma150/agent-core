@@ -15,6 +15,7 @@ export function openDb(path: string): Db {
   db.pragma("foreign_keys = ON");
   db.exec(readFileSync(schemaPath, "utf8"));
   ensureColumn(db, "tasks", "flagged", "INTEGER NOT NULL DEFAULT 0"); // added in M5; CREATE IF NOT EXISTS skips existing tables
+  ensureColumn(db, "tasks", "base_branch", "TEXT");
   return db;
 }
 
