@@ -38,3 +38,13 @@ export function useApi<T>(path: string): Loaded<T> {
   const reload = useCallback(() => setManual((n) => n + 1), []);
   return { ...state, reload };
 }
+
+/** Re-renders on an interval so relative times ("5 min ago") stay fresh. */
+export function useTick(ms = 30_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+  return now;
+}

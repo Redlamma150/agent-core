@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { simpleGit } from "simple-git";
 
 export class MergeError extends Error {}
@@ -20,7 +20,12 @@ export interface Prepared {
  * builder never touches the owner's checkout. Only `merge` ever changes the base branch.
  */
 export class GitService {
-  constructor(private worktreesDir: string) {}
+  private worktreesDir: string;
+
+  constructor(worktreesDir: string) {
+    // Always absolute: git runs inside the project's repo, so a relative path would land worktrees inside the owner's repo.
+    this.worktreesDir = resolve(worktreesDir);
+  }
 
   worktreePath(repoPath: string, taskId: number): string {
     return join(this.worktreesDir, `${basename(repoPath)}-task-${taskId}`);
@@ -31,6 +36,9 @@ export class GitService {
     const git = simpleGit(repoPath);
     if (!(await git.checkIsRepo())) throw new Error(`${repoPath} is not a git repository`);
     const branch = `task-${taskId}`;
+    if (!(await git.raw(["rev-list", "-n", "1", "--all"]).catch(() => "")).trim()) {
+      throw new Error(`${repoPath} has no commits yet: make an initial commit before running tasks on it`);
+    }
     const base = knownBase ?? (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
     if (base === "HEAD") throw new Error("repository is in detached HEAD state; check out a branch first");
     const worktree = this.worktreePath(repoPath, taskId);

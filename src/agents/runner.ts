@@ -1,5 +1,8 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Options, PermissionMode, SDKMessage, SDKResultMessage, SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Db } from "../db/index.js";
+import { toolCallsOf, type ActivityService } from "../core/activity.js";
 import type { TaskService } from "../core/tasks.js";
 import { handoffJsonSchema, parseHandoff, type AgentRole, type Handoff } from "./contract.js";
 
@@ -39,8 +42,32 @@ export function countTokens(result: SDKResultMessage): number {
   return Object.values(result.modelUsage ?? {}).reduce((sum, m) => sum + m.inputTokens + m.outputTokens + m.cacheCreationInputTokens, 0);
 }
 
+/**
+ * Environment variables an agent may see: only what the CLI needs to run and to log in to the Claude subscription.
+ * An allowlist, so any new secret the core gets (tokens, VAPID keys) is hidden from agents by default.
+ */
+const AGENT_ENV_ALLOWED = [
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM",
+  "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN",
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS",
+];
+
+export function agentEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> {
+  return Object.fromEntries(AGENT_ENV_ALLOWED.filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
+}
+
+/**
+ * The core's own files agents must not touch: the .env and the database files. Not the whole data folder:
+ * the task worktrees live inside it and the builder has to work there.
+ */
+export function protectedPathsFor(dbPath: string, envFile = ".env"): string[] {
+  const db = resolve(dbPath);
+  return [resolve(envFile), db, `${db}-wal`, `${db}-shm`];
+}
+
 export class AgentRunner {
-  constructor(private db: Db, private tasks: TaskService, private queryFn: QueryFn = defaultQuery) {}
+  /** `protectedPaths`: files and folders of the core itself (.env, database) that agents must never read. */
+  constructor(private db: Db, private tasks: TaskService, private queryFn: QueryFn = defaultQuery, private activity?: ActivityService, private protectedPaths: string[] = []) {}
 
   /** Runs one agent call, validates its output against the handoff contract and logs it to llm_calls. */
   async run(req: RunRequest): Promise<RunResult> {
@@ -51,12 +78,16 @@ export class AgentRunner {
     let result: SDKResultMessage | undefined;
     let outcome: { ok: true; handoff: Handoff } | { ok: false; reason: string };
     try {
+      // The SDK reports a missing working directory as "binary failed to launch", which sends people hunting in the wrong place.
+      if (!existsSync(req.cwd)) throw new Error(`working directory does not exist: ${req.cwd}`);
       const options: Options = {
         model: req.model,
         systemPrompt: req.systemPrompt,
         cwd: req.cwd,
         tools: req.tools,
         allowedTools: req.allowedTools,
+        // "//abs/path" is the permission-rule syntax for an absolute path. Denied for every tool that can read files.
+        disallowedTools: this.protectedPaths.flatMap((p) => [`Read(/${p})`, `Read(/${p}/**)`, `Edit(/${p})`, `Edit(/${p}/**)`]),
         permissionMode: req.permissionMode,
         maxTurns: req.maxTurns ?? 30,
         outputFormat: { type: "json_schema", schema: handoffJsonSchema },
@@ -67,11 +98,14 @@ export class AgentRunner {
         mcpServers: {},
         settings: { disableClaudeAiConnectors: true },
         abortController: abort,
-        // Agents must run on the Claude subscription: never hand the SDK an API key, even if one leaks into the environment.
-        env: { ...process.env, ANTHROPIC_API_KEY: undefined },
+        // Agents run on the Claude subscription (never an API key) and see none of the core's secrets: see agentEnv.
+        env: agentEnv(),
       };
       for await (const message of this.queryFn({ prompt: req.prompt, options })) {
         if (message.type === "result") result = message;
+        else if (message.type === "assistant" && this.activity) {
+          for (const call of toolCallsOf(message, req.cwd)) this.activity.record(req.taskId, req.role, call.tool, call.target);
+        }
       }
       outcome = result ? this.validate(result, req) : { ok: false, reason: "agent produced no result" };
     } catch (err) {

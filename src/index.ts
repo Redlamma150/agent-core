@@ -3,7 +3,8 @@ import { startServers } from "./api/server.js";
 import { EventBus } from "./api/events.js";
 import { attachPush, createWebPushSender, PushService } from "./api/push.js";
 import { loadConfig } from "./config.js";
-import { AgentRunner } from "./agents/runner.js";
+import { AgentRunner, protectedPathsFor } from "./agents/runner.js";
+import { ActivityService } from "./core/activity.js";
 import { ApprovalService } from "./core/approvals.js";
 import { BudgetService } from "./core/budget.js";
 import { GitService } from "./core/git.js";
@@ -16,6 +17,9 @@ const config = loadConfig();
 const db = openDb(config.DB_PATH);
 const bus = new EventBus();
 const tasks = new TaskService(db, bus);
+const activity = new ActivityService(db, bus);
+const purged = tasks.purgeTrashed();
+if (purged > 0) console.log(`removed ${purged} task(s) that sat in the trash for over 30 days`);
 const approvals = new ApprovalService(db, tasks, { reminderMinutes: config.REMINDER_MINUTES, reminderCount: config.REMINDER_COUNT }, bus);
 
 const push = new PushService(
@@ -25,11 +29,11 @@ const push = new PushService(
 attachPush(bus, push);
 
 const budget = new BudgetService(tasks, config.TASK_TOKEN_CAP, bus);
-const pipeline = new Pipeline({ db, tasks, approvals, runner: new AgentRunner(db, tasks), budget, git: new GitService(join(dirname(config.DB_PATH), "worktrees")) });
+const pipeline = new Pipeline({ db, tasks, approvals, runner: new AgentRunner(db, tasks, undefined, activity, protectedPathsFor(config.DB_PATH)), budget, git: new GitService(join(dirname(config.DB_PATH), "worktrees")), activity });
 const resumed = pipeline.resume();
 if (resumed > 0) console.log(`resuming ${resumed} unfinished task(s)`);
 
-const servers = await startServers({ db, accessToken: config.APP_ACCESS_TOKEN, tasks, approvals, driver: pipeline, push, vapidPublicKey: config.VAPID_PUBLIC_KEY, staticDir: config.STATIC_DIR, bus, logger: true }, config.API_BIND_HOSTS, config.API_PORT);
+const servers = await startServers({ db, accessToken: config.APP_ACCESS_TOKEN, tasks, approvals, driver: pipeline, activity, push, vapidPublicKey: config.VAPID_PUBLIC_KEY, staticDir: config.STATIC_DIR, bus, logger: true }, config.API_BIND_HOSTS, config.API_PORT);
 
 // Reminders are published on the bus: SSE clients see them live and attachPush forwards them as Web Push.
 const reminderTimer = setInterval(() => {

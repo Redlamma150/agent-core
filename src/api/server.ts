@@ -17,13 +17,16 @@ export interface ApiDeps extends Services {
   staticDir?: string;
   bus?: EventBus;
   logger?: boolean;
+  /** Where logs go instead of stdout (tests read them to check what is and is not logged). */
+  logStream?: NodeJS.WritableStream;
 }
 
-export function buildApp({ db, accessToken, tasks, approvals, driver, push, vapidPublicKey, staticDir, bus = new EventBus(), logger = false }: ApiDeps): FastifyInstance {
+export function buildApp({ db, accessToken, tasks, approvals, driver, activity, push, vapidPublicKey, staticDir, bus = new EventBus(), logger = false, logStream }: ApiDeps): FastifyInstance {
   const app = Fastify({
-    logger: logger
+    logger: logger || logStream
       ? {
           level: "info",
+          ...(logStream ? { stream: logStream } : {}),
           // Log method and path only: no headers (token), query string or body.
           serializers: { req: (r) => ({ method: r.method, path: r.url?.split("?")[0] }) },
         }
@@ -34,7 +37,7 @@ export function buildApp({ db, accessToken, tasks, approvals, driver, push, vapi
   app.register(async (api) => {
     registerAuth(api, accessToken);
     registerEvents(api, bus);
-    registerRoutes(api, db, { tasks, approvals, driver });
+    registerRoutes(api, db, { tasks, approvals, driver, activity });
     registerPush(api, push, vapidPublicKey);
   });
 

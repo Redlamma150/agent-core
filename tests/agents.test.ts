@@ -1,10 +1,12 @@
+import { tmpdir } from "node:os";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 import { EventBus } from "../src/api/events.js";
 import { parseHandoff, handoffJsonSchema } from "../src/agents/contract.js";
 import { executeAgent } from "../src/agents/execute.js";
 import { route, type RouteInput } from "../src/agents/router.js";
-import { AgentRunner, type QueryFn } from "../src/agents/runner.js";
+import { AgentRunner, agentEnv, protectedPathsFor, type QueryFn } from "../src/agents/runner.js";
+import { BUILDER_ALLOWED } from "../src/agents/templates.js";
 import { BudgetService } from "../src/core/budget.js";
 import { TaskService } from "../src/core/tasks.js";
 import { openDb } from "../src/db/index.js";
@@ -77,7 +79,7 @@ function fakeQuery(steps: (() => SDKMessage | Error)[]) {
   return { fn, calls };
 }
 
-function setup(steps: (() => SDKMessage | Error)[], cap = 200000, flagged = false) {
+function setup(steps: (() => SDKMessage | Error)[], cap = 200000, flagged = false, protectedPaths: string[] = []) {
   const db = openDb(":memory:");
   db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p','/r')").run();
   const bus = new EventBus();
@@ -86,9 +88,9 @@ function setup(steps: (() => SDKMessage | Error)[], cap = 200000, flagged = fals
   const tasks = new TaskService(db, bus);
   const task = tasks.create(1, "work", flagged);
   const q = fakeQuery(steps);
-  const runner = new AgentRunner(db, tasks, q.fn);
+  const runner = new AgentRunner(db, tasks, q.fn, undefined, protectedPaths);
   const budget = new BudgetService(tasks, cap, bus);
-  const run = () => executeAgent({ tasks, runner, budget }, { taskId: task.id, role: "builder", prompt: "go", systemPrompt: "sys", cwd: "/r" });
+  const run = () => executeAgent({ tasks, runner, budget }, { taskId: task.id, role: "builder", prompt: "go", systemPrompt: "sys", cwd: tmpdir() });
   return { db, tasks, task, q, run, events };
 }
 
@@ -116,13 +118,42 @@ describe("runner", () => {
     }
   });
 
+  it("hides the core's secrets from agents", async () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, { APP_ACCESS_TOKEN: "tok-secret", VAPID_PRIVATE_KEY: "vapid-secret", HOME: "/home/x" });
+    try {
+      const t = setup([() => result(good(1))]);
+      await t.run();
+      const env = t.q.calls[0]?.env ?? {};
+      expect(env.APP_ACCESS_TOKEN).toBeUndefined();
+      expect(env.VAPID_PRIVATE_KEY).toBeUndefined();
+      expect(env.HOME).toBe("/home/x");
+      expect(agentEnv({ SECRET_X: "1", PATH: "/bin" })).toEqual({ PATH: "/bin" });
+    } finally {
+      process.env = saved;
+    }
+  });
+
+  it("denies agents the core's .env and data folder, and gives the builder no free node", async () => {
+    const t = setup([() => result(good(1))], 200000, false, ["/core/.env", "/core/data"]);
+    await t.run();
+    expect(t.q.calls[0]?.disallowedTools).toEqual(expect.arrayContaining(["Read(//core/.env)", "Read(//core/data/**)", "Edit(//core/.env)"]));
+    expect(BUILDER_ALLOWED.some((x) => x.startsWith("Bash(node"))).toBe(false);
+  });
+
+  it("protects the .env and database files but not the worktrees folder next to them", () => {
+    const paths = protectedPathsFor("/core/data/core.db", "/core/.env");
+    expect(paths).toEqual(["/core/.env", "/core/data/core.db", "/core/data/core.db-wal", "/core/data/core.db-shm"]);
+    expect(paths.some((p) => "/core/data/worktrees/proj-task-1/a.ts".startsWith(p + "/") || p === "/core/data")).toBe(false);
+  });
+
   it("passes the role's tool list through and loads no settings by default", async () => {
     const db = openDb(":memory:");
     db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p','/r')").run();
     const tasks = new TaskService(db);
     const task = tasks.create(1, "x");
     const q = fakeQuery([() => result(good(task.id))]);
-    await new AgentRunner(db, tasks, q.fn).run({ taskId: task.id, role: "builder", model: "sonnet", prompt: "p", systemPrompt: "s", cwd: "/r", tools: ["Read", "Grep"] });
+    await new AgentRunner(db, tasks, q.fn).run({ taskId: task.id, role: "builder", model: "sonnet", prompt: "p", systemPrompt: "s", cwd: tmpdir(), tools: ["Read", "Grep"] });
     expect(q.calls[0]).toMatchObject({
       tools: ["Read", "Grep"],
       settingSources: [],
@@ -130,6 +161,19 @@ describe("runner", () => {
       mcpServers: {},
       settings: { disableClaudeAiConnectors: true },
     });
+  });
+
+  it("fails clearly, without calling the SDK, when the working directory does not exist", async () => {
+    const t = setup([() => result(good(1))]);
+    const out = await new AgentRunner(t.db, t.tasks, t.q.fn).run({ taskId: t.task.id, role: "builder", model: "sonnet", prompt: "p", systemPrompt: "s", cwd: "/no/such/dir" });
+    expect(out).toMatchObject({ ok: false, reason: expect.stringContaining("working directory does not exist") });
+    expect(t.q.calls).toHaveLength(0);
+  });
+
+  it("records why an agent call failed in the task's step log", async () => {
+    const t = setup([() => new Error("boom"), () => result(good(1))]);
+    await t.run();
+    expect(t.db.prepare("SELECT summary FROM steps WHERE status = 'agent_error'").all()).toEqual([{ summary: "builder: agent call failed: boom" }]);
   });
 
   it("falls back to parsing the result text when there is no structured output", async () => {

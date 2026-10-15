@@ -41,3 +41,20 @@ npm test            # core + app library tests
 npm run typecheck
 npm run app:dev     # Vite dev server, proxies API calls to 127.0.0.1:8787
 ```
+
+## Registering a project
+
+```bash
+npm run project:add -- <name> <absolute repo path> [context file inside the repo] ["test command"]
+```
+
+The optional test command (for example `"npm test"`) runs in the task's worktree before you are asked to approve, and the result is shown in the approval. It is split on spaces and run without a shell, with a minimal environment (none of the core's secrets). The project's own dependencies must already be installed there, or the tests will fail and say so.
+
+The repository needs at least one commit. The context file (for example `CONTEXT.md`) is handed to the planner and the builder on every task.
+
+## Acceptance check on the phone (M7)
+
+The automated acceptance tests (`tests/acceptance.test.ts`) cover every criterion with a scripted stand-in for the agents. Two things only a real phone can show:
+
+1. The approval alert arrives while the app is closed, and the reminders arrive after 10 and 20 minutes.
+2. Tapping "אשר" in the app merges the task branch.

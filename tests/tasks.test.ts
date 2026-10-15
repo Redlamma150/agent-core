@@ -14,7 +14,7 @@ const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   awaiting_approval: ["in_progress", "merged", "blocked", "stopped"],
   blocked: ["planning", "in_progress", "stopped"],
   merged: [],
-  stopped: [],
+  stopped: ["planning", "in_progress"],
 };
 
 /** Shortest legal path from `received` to each state, used to reach any starting state. */

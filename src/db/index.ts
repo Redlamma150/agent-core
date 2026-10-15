@@ -16,6 +16,11 @@ export function openDb(path: string): Db {
   db.exec(readFileSync(schemaPath, "utf8"));
   ensureColumn(db, "tasks", "flagged", "INTEGER NOT NULL DEFAULT 0"); // added in M5; CREATE IF NOT EXISTS skips existing tables
   ensureColumn(db, "tasks", "base_branch", "TEXT");
+  ensureColumn(db, "tasks", "title", "TEXT"); // added in M8
+  ensureColumn(db, "tasks", "archived_at", "TEXT");
+  ensureColumn(db, "tasks", "deleted_at", "TEXT");
+  ensureColumn(db, "tasks", "token_extra", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "projects", "test_command", "TEXT");
   return db;
 }
 

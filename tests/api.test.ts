@@ -15,6 +15,13 @@ export function services(db: ReturnType<typeof openDb>, bus?: EventBus) {
   const driver = {
     start: (id: number) => void started.push(id),
     stop: (id: number) => tasks.stop(id),
+    continueTask: (id: number, _note?: string) => tasks.transition(id, "planning"),
+    duplicate: (id: number) => {
+      const t = tasks.get(id);
+      const copy = tasks.create(t.project_id, t.description);
+      started.push(copy.id);
+      return copy;
+    },
     resolveApproval: async (id: number, approve: boolean, note?: string) => approvals.resolve(id, approve, note),
   };
   return {
@@ -73,7 +80,7 @@ describe("routes", () => {
 
   it("reports usage and pending approvals", async () => {
     const { app } = setup();
-    expect((await app.inject({ url: "/usage", headers: auth })).json()).toEqual({ calls: 0, input_tokens: 0, output_tokens: 0 });
+    expect((await app.inject({ url: "/usage", headers: auth })).json()).toMatchObject({ calls: 0, input_tokens: 0, output_tokens: 0, last_5h: { calls: 0 }, top_tasks: [] });
     expect((await app.inject({ url: "/approvals", headers: auth })).json()).toEqual([]);
   });
 
@@ -153,6 +160,24 @@ describe("listening", () => {
     const chunk = new TextDecoder().decode((await reader.read()).value);
     expect(chunk).toBe('event: task\ndata: {"id":1,"status":"planning"}\n\n');
     await reader.cancel();
+  });
+
+  it("ends open event streams when the server closes, after many reconnects", async () => {
+    const bus = new EventBus();
+    let db: ReturnType<typeof openDb>;
+    servers = await startServers({ db: (db = openDb(":memory:")), accessToken: TOKEN, ...services(db, bus), bus }, ["127.0.0.1"], 0);
+    const port = (servers[0]!.server.address() as { port: number }).port;
+    for (let i = 0; i < 5; i++) {
+      const r = await fetch(`http://127.0.0.1:${port}/events`, { headers: auth });
+      const rd = r.body!.getReader();
+      await rd.read();
+      await rd.cancel();
+    }
+    const res = await fetch(`http://127.0.0.1:${port}/events`, { headers: auth });
+    const reader = res.body!.getReader();
+    await reader.read();
+    await servers[0]!.close();
+    expect((await reader.read()).done).toBe(true);
   });
 
   it("does not answer on an address outside the bind list", async () => {
