@@ -4,6 +4,7 @@ import { api, setUnauthorizedHandler, streamEvents, tokenStore } from "./lib/api
 import { ApprovalsScreen } from "./screens/Approvals";
 import { ChatScreen } from "./screens/Chat";
 import { LoginScreen } from "./screens/Login";
+import { NewTaskScreen } from "./screens/NewTask";
 import { ProjectsScreen } from "./screens/Projects";
 import { SettingsScreen } from "./screens/Settings";
 import { TaskScreen } from "./screens/Task";
@@ -15,7 +16,6 @@ const TABS = [
   { path: "/approvals", label: "אישורים", icon: "✓" },
   { path: "/projects", label: "פרויקטים", icon: "▣" },
   { path: "/usage", label: "צריכה", icon: "◔" },
-  { path: "/chat", label: "צ'אט", icon: "✎" },
 ];
 
 export function App() {
@@ -44,15 +44,16 @@ function Shell({ onLogout }: { onLogout: () => void }) {
     <LiveContext.Provider value={live}>
       <header className="topbar">
         <h1>מערכת סוכנים</h1>
-        <span className={connected ? "dot ok" : "dot bad"} role="status" aria-label={connected ? "מחובר" : "אין חיבור"} />
+        <span className={connected ? "conn" : "conn off"} role="status"><i />{connected ? "חי" : "מנותק"}</span>
         <a className="icon-btn" href="#/settings" aria-label="הגדרות">⚙</a>
       </header>
       {!connected && <div className="banner">אין חיבור לליבה. מנסה להתחבר מחדש…</div>}
       <main>{screen(route, onLogout)}</main>
+      {!route.startsWith("/new") && !/^\/tasks\/\d+/.test(route) && <a className="fab" href="#/new"><span aria-hidden="true">＋</span> משימה חדשה</a>}
       <nav className="tabbar" aria-label="ניווט ראשי">
         {TABS.map((t) => (
           <a key={t.path} href={`#${t.path}`} aria-current={route.startsWith(t.path) ? "page" : undefined}>
-            <span aria-hidden="true">{t.icon}</span>
+            <span className="glyph" aria-hidden="true">{t.icon}</span>
             <span>{t.label}</span>
             {t.path === "/approvals" && <PendingBadge />}
           </a>
@@ -68,6 +69,12 @@ function PendingBadge() {
 }
 
 function screen(route: string, onLogout: () => void) {
+  if (route.startsWith("/new")) {
+    const project = Number(new URLSearchParams(route.split("?")[1] ?? "").get("project"));
+    return <NewTaskScreen projectId={project > 0 ? project : undefined} />;
+  }
+  if (route === "/list/archived") return <TasksScreen view="archived" />;
+  if (route === "/list/trash") return <TasksScreen view="trash" />;
   const task = /^\/tasks\/(\d+)$/.exec(route);
   if (task?.[1]) return <TaskScreen id={Number(task[1])} />;
   if (route.startsWith("/approvals")) return <ApprovalsScreen />;

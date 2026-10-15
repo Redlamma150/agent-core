@@ -45,8 +45,10 @@ npm run app:dev     # Vite dev server, proxies API calls to 127.0.0.1:8787
 ## Registering a project
 
 ```bash
-npm run project:add -- <name> <absolute repo path> [context file inside the repo]
+npm run project:add -- <name> <absolute repo path> [context file inside the repo] ["test command"]
 ```
+
+The optional test command (for example `"npm test"`) runs in the task's worktree before you are asked to approve, and the result is shown in the approval. It is split on spaces and run without a shell, with a minimal environment (none of the core's secrets). The project's own dependencies must already be installed there, or the tests will fail and say so.
 
 The repository needs at least one commit. The context file (for example `CONTEXT.md`) is handed to the planner and the builder on every task.
 
