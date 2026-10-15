@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Options, PermissionMode, SDKMessage, SDKResultMessage, SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Db } from "../db/index.js";
 import { toolCallsOf, type ActivityService } from "../core/activity.js";
@@ -53,6 +54,15 @@ const AGENT_ENV_ALLOWED = [
 
 export function agentEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> {
   return Object.fromEntries(AGENT_ENV_ALLOWED.filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
+}
+
+/**
+ * The core's own files agents must not touch: the .env and the database files. Not the whole data folder:
+ * the task worktrees live inside it and the builder has to work there.
+ */
+export function protectedPathsFor(dbPath: string, envFile = ".env"): string[] {
+  const db = resolve(dbPath);
+  return [resolve(envFile), db, `${db}-wal`, `${db}-shm`];
 }
 
 export class AgentRunner {

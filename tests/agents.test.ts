@@ -5,7 +5,7 @@ import { EventBus } from "../src/api/events.js";
 import { parseHandoff, handoffJsonSchema } from "../src/agents/contract.js";
 import { executeAgent } from "../src/agents/execute.js";
 import { route, type RouteInput } from "../src/agents/router.js";
-import { AgentRunner, agentEnv, type QueryFn } from "../src/agents/runner.js";
+import { AgentRunner, agentEnv, protectedPathsFor, type QueryFn } from "../src/agents/runner.js";
 import { BUILDER_ALLOWED } from "../src/agents/templates.js";
 import { BudgetService } from "../src/core/budget.js";
 import { TaskService } from "../src/core/tasks.js";
@@ -139,6 +139,12 @@ describe("runner", () => {
     await t.run();
     expect(t.q.calls[0]?.disallowedTools).toEqual(expect.arrayContaining(["Read(//core/.env)", "Read(//core/data/**)", "Edit(//core/.env)"]));
     expect(BUILDER_ALLOWED.some((x) => x.startsWith("Bash(node"))).toBe(false);
+  });
+
+  it("protects the .env and database files but not the worktrees folder next to them", () => {
+    const paths = protectedPathsFor("/core/data/core.db", "/core/.env");
+    expect(paths).toEqual(["/core/.env", "/core/data/core.db", "/core/data/core.db-wal", "/core/data/core.db-shm"]);
+    expect(paths.some((p) => "/core/data/worktrees/proj-task-1/a.ts".startsWith(p + "/") || p === "/core/data")).toBe(false);
   });
 
   it("passes the role's tool list through and loads no settings by default", async () => {
