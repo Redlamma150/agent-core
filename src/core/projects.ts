@@ -8,6 +8,8 @@ export interface ProjectInput {
   repoPath: string;
   /** Path of the context file, relative to the repository. */
   contextFile?: string;
+  /** Command run in the task's worktree before approval, e.g. "npm test". Split on spaces, no shell. */
+  testCommand?: string;
 }
 
 /** Registers (or updates) a project after checking that the repo and context file are usable. */
@@ -31,8 +33,8 @@ export async function registerProject(db: Db, input: ProjectInput): Promise<{ id
   }
 
   db.prepare(
-    "INSERT INTO projects (name, repo_path, context_file) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET repo_path = excluded.repo_path, context_file = excluded.context_file",
-  ).run(name, repo, input.contextFile ?? null);
+    "INSERT INTO projects (name, repo_path, context_file, test_command) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET repo_path = excluded.repo_path, context_file = excluded.context_file, test_command = excluded.test_command",
+  ).run(name, repo, input.contextFile ?? null, input.testCommand?.trim() || null);
   const row = db.prepare("SELECT id FROM projects WHERE name = ?").get(name) as { id: number };
   return { id: row.id, warnings };
 }

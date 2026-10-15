@@ -209,7 +209,7 @@ describe("M7 acceptance", () => {
     await t.pipeline.idle();
     const usage = (await t.app.inject({ url: "/usage", headers: auth })).json();
     const fromLog = t.db.prepare("SELECT COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens FROM llm_calls").get();
-    expect(usage).toEqual(fromLog);
-    expect(usage).toEqual({ calls: 2, input_tokens: 420, output_tokens: 42 });
+    expect(usage).toMatchObject(fromLog as object);
+    expect(usage).toMatchObject({ calls: 2, input_tokens: 420, output_tokens: 42 });
   });
 });

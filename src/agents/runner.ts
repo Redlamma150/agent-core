@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import type { Options, PermissionMode, SDKMessage, SDKResultMessage, SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Db } from "../db/index.js";
+import { toolCallsOf, type ActivityService } from "../core/activity.js";
 import type { TaskService } from "../core/tasks.js";
 import { handoffJsonSchema, parseHandoff, type AgentRole, type Handoff } from "./contract.js";
 
@@ -41,7 +42,7 @@ export function countTokens(result: SDKResultMessage): number {
 }
 
 export class AgentRunner {
-  constructor(private db: Db, private tasks: TaskService, private queryFn: QueryFn = defaultQuery) {}
+  constructor(private db: Db, private tasks: TaskService, private queryFn: QueryFn = defaultQuery, private activity?: ActivityService) {}
 
   /** Runs one agent call, validates its output against the handoff contract and logs it to llm_calls. */
   async run(req: RunRequest): Promise<RunResult> {
@@ -75,6 +76,9 @@ export class AgentRunner {
       };
       for await (const message of this.queryFn({ prompt: req.prompt, options })) {
         if (message.type === "result") result = message;
+        else if (message.type === "assistant" && this.activity) {
+          for (const call of toolCallsOf(message, req.cwd)) this.activity.record(req.taskId, req.role, call.tool, call.target);
+        }
       }
       outcome = result ? this.validate(result, req) : { ok: false, reason: "agent produced no result" };
     } catch (err) {

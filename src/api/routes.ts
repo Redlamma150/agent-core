@@ -4,27 +4,40 @@ import type { Db } from "../db/index.js";
 import { AlreadyResolvedError, type ApprovalService } from "../core/approvals.js";
 import { MergeError } from "../core/git.js";
 import type { TaskDriver } from "../core/pipeline.js";
-import { InvalidTransitionError, NotFoundError, type TaskService } from "../core/tasks.js";
+import type { ActivityService } from "../core/activity.js";
+import { InvalidActionError, InvalidTransitionError, NotFoundError, type TaskService } from "../core/tasks.js";
 
 const notImplemented = (reply: FastifyReply, milestone: string) =>
   reply.code(501).send({ error: "not_implemented", milestone });
 
-const TASK_COLUMNS = "id, project_id, description, status, branch, tokens_used, flagged, created_at, updated_at";
+const TASK_COLUMNS =
+  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.created_at, t.updated_at";
+const TASK_FROM = "FROM tasks t JOIN projects p ON p.id = t.project_id";
+/** Why a blocked or stopped task stopped: the summary of the step that moved it there. */
+const REASON = "(SELECT summary FROM steps WHERE task_id = t.id AND to_status IN ('blocked','stopped') ORDER BY id DESC LIMIT 1) AS reason";
+const VIEWS: Record<string, string> = {
+  active: "t.deleted_at IS NULL AND t.archived_at IS NULL",
+  archived: "t.deleted_at IS NULL AND t.archived_at IS NOT NULL",
+  trash: "t.deleted_at IS NOT NULL",
+};
 
 const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional() });
+const editTaskBody = z.object({ title: z.string().trim().min(1).max(80).optional(), description: z.string().trim().min(1).max(5000).optional() }).refine((b) => b.title !== undefined || b.description !== undefined, "nothing to change");
+const continueBody = z.object({ note: z.string().trim().max(5000).optional() });
 const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z.string().max(5000).optional() });
 
 export interface Services {
   tasks: TaskService;
   approvals: ApprovalService;
   driver: TaskDriver;
+  activity?: ActivityService;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message });
-    if (err instanceof InvalidTransitionError || err instanceof AlreadyResolvedError) return reply.code(409).send({ error: "conflict", message: err.message });
+    if (err instanceof InvalidActionError || err instanceof InvalidTransitionError || err instanceof AlreadyResolvedError) return reply.code(409).send({ error: "conflict", message: err.message });
     if (err instanceof z.ZodError) return reply.code(400).send({ error: "invalid_body", issues: err.issues.map((i) => i.message) });
     if (err instanceof Error && "statusCode" in err && typeof err.statusCode === "number" && err.statusCode < 500) {
       return reply.code(err.statusCode).send({ error: "bad_request" });
@@ -33,7 +46,15 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver }: 
     return reply.code(500).send({ error: "internal" });
   });
 
-  app.get("/tasks", async () => db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks ORDER BY id DESC LIMIT 200`).all());
+  const taskId = (raw: string): number | null => (/^\d+$/.test(raw) ? Number(raw) : null);
+  const oneTask = (id: number) => db.prepare(`SELECT ${TASK_COLUMNS}, ${REASON} ${TASK_FROM} WHERE t.id = ?`).get(id);
+
+  app.get<{ Querystring: { view?: string } }>("/tasks", async (req, reply) => {
+    const where = VIEWS[req.query.view ?? "active"];
+    if (!where) return reply.code(400).send({ error: "invalid_view" });
+    return db.prepare(`SELECT ${TASK_COLUMNS}, ${REASON} ${TASK_FROM} WHERE ${where} ORDER BY t.id DESC LIMIT 200`).all();
+  });
+  app.get("/projects", async () => db.prepare("SELECT id, name FROM projects ORDER BY name").all());
   app.post("/tasks", async (req, reply) => {
     const body = createTaskBody.parse(req.body);
     if (!db.prepare("SELECT 1 FROM projects WHERE id = ?").get(body.project_id)) return reply.code(404).send({ error: "project_not_found" });
@@ -43,10 +64,57 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver }: 
   });
 
   app.get<{ Params: { id: string } }>("/tasks/:id", async (req, reply) => {
-    if (!/^\d+$/.test(req.params.id)) return reply.code(400).send({ error: "invalid_id" });
-    const task = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`).get(Number(req.params.id));
-    if (!task) return reply.code(404).send({ error: "not_found" });
-    return task;
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    return oneTask(id) ?? reply.code(404).send({ error: "not_found" });
+  });
+  app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/tasks/:id/activity", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    tasks.get(id);
+    return activity?.list(id, Number(req.query.after) || 0) ?? [];
+  });
+  app.get<{ Params: { id: string } }>("/tasks/:id/steps", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    tasks.get(id);
+    return db.prepare("SELECT id, agent, status, from_status, to_status, summary, created_at FROM steps WHERE task_id = ? ORDER BY id").all(id);
+  });
+  app.patch<{ Params: { id: string } }>("/tasks/:id", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    tasks.update(id, editTaskBody.parse(req.body));
+    return oneTask(id);
+  });
+  app.post<{ Params: { id: string } }>("/tasks/:id/continue", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    driver.continueTask(id, continueBody.parse(req.body ?? {}).note);
+    return oneTask(id);
+  });
+  app.post<{ Params: { id: string } }>("/tasks/:id/duplicate", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    return reply.code(201).send(oneTask(driver.duplicate(id).id));
+  });
+  for (const [path, run] of [
+    ["archive", (id: number) => tasks.archive(id, true)],
+    ["unarchive", (id: number) => tasks.archive(id, false)],
+    ["restore", (id: number) => tasks.restore(id)],
+  ] as const) {
+    app.post<{ Params: { id: string } }>(`/tasks/:id/${path}`, async (req, reply) => {
+      const id = taskId(req.params.id);
+      if (id === null) return reply.code(400).send({ error: "invalid_id" });
+      run(id);
+      return oneTask(id);
+    });
+  }
+  /** Moves the task to the trash; it is removed for good after 30 days. */
+  app.delete<{ Params: { id: string } }>("/tasks/:id", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    tasks.trash(id);
+    return oneTask(id);
   });
   app.post<{ Params: { id: string } }>("/tasks/:id/stop", async (req, reply) => {
     if (!/^\d+$/.test(req.params.id)) return reply.code(400).send({ error: "invalid_id" });
@@ -66,10 +134,21 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver }: 
   app.post("/projects/active", async (_req, reply) => notImplemented(reply, "M6"));
 
   app.get("/usage", async () => {
-    const row = db
-      .prepare("SELECT COUNT(*) AS calls, COALESCE(SUM(input_tokens),0) AS input_tokens, COALESCE(SUM(output_tokens),0) AS output_tokens FROM llm_calls")
-      .get();
-    return row;
+    const sum = "COUNT(*) AS calls, COALESCE(SUM(input_tokens),0) AS input_tokens, COALESCE(SUM(output_tokens),0) AS output_tokens";
+    const since = (modifier: string) => db.prepare(`SELECT ${sum} FROM llm_calls WHERE created_at >= datetime('now', ?)`).get(modifier);
+    return {
+      ...(db.prepare(`SELECT ${sum} FROM llm_calls`).get() as object),
+      // Windows for the quota meter: the Claude plan limits usage in rolling windows, so recent usage is what matters.
+      last_5h: since("-5 hours"),
+      last_24h: since("-24 hours"),
+      last_7d: since("-7 days"),
+      top_tasks: db
+        .prepare(
+          `SELECT t.id, t.title, SUM(c.input_tokens + c.output_tokens) AS tokens FROM llm_calls c JOIN tasks t ON t.id = c.task_id
+           WHERE c.created_at >= datetime('now', '-7 days') GROUP BY t.id ORDER BY tokens DESC LIMIT 5`,
+        )
+        .all(),
+    };
   });
 
   app.post("/chat", async (_req, reply) => notImplemented(reply, "M5"));

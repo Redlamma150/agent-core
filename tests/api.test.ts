@@ -15,6 +15,13 @@ export function services(db: ReturnType<typeof openDb>, bus?: EventBus) {
   const driver = {
     start: (id: number) => void started.push(id),
     stop: (id: number) => tasks.stop(id),
+    continueTask: (id: number, _note?: string) => tasks.transition(id, "planning"),
+    duplicate: (id: number) => {
+      const t = tasks.get(id);
+      const copy = tasks.create(t.project_id, t.description);
+      started.push(copy.id);
+      return copy;
+    },
     resolveApproval: async (id: number, approve: boolean, note?: string) => approvals.resolve(id, approve, note),
   };
   return {
@@ -73,7 +80,7 @@ describe("routes", () => {
 
   it("reports usage and pending approvals", async () => {
     const { app } = setup();
-    expect((await app.inject({ url: "/usage", headers: auth })).json()).toEqual({ calls: 0, input_tokens: 0, output_tokens: 0 });
+    expect((await app.inject({ url: "/usage", headers: auth })).json()).toMatchObject({ calls: 0, input_tokens: 0, output_tokens: 0, last_5h: { calls: 0 }, top_tasks: [] });
     expect((await app.inject({ url: "/approvals", headers: auth })).json()).toEqual([]);
   });
 
