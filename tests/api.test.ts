@@ -162,6 +162,24 @@ describe("listening", () => {
     await reader.cancel();
   });
 
+  it("ends open event streams when the server closes, after many reconnects", async () => {
+    const bus = new EventBus();
+    let db: ReturnType<typeof openDb>;
+    servers = await startServers({ db: (db = openDb(":memory:")), accessToken: TOKEN, ...services(db, bus), bus }, ["127.0.0.1"], 0);
+    const port = (servers[0]!.server.address() as { port: number }).port;
+    for (let i = 0; i < 5; i++) {
+      const r = await fetch(`http://127.0.0.1:${port}/events`, { headers: auth });
+      const rd = r.body!.getReader();
+      await rd.read();
+      await rd.cancel();
+    }
+    const res = await fetch(`http://127.0.0.1:${port}/events`, { headers: auth });
+    const reader = res.body!.getReader();
+    await reader.read();
+    await servers[0]!.close();
+    expect((await reader.read()).done).toBe(true);
+  });
+
   it("does not answer on an address outside the bind list", async () => {
     const db = openDb(":memory:");
     servers = await startServers({ db, accessToken: TOKEN, ...services(db) }, ["127.0.0.1"], 0);

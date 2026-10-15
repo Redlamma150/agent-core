@@ -23,6 +23,13 @@ export class EventBus {
 const HEARTBEAT_MS = 25_000;
 
 export function registerEvents(app: FastifyInstance, bus: EventBus): void {
+  // One hook for all streams (registered once, not per connection, so reconnecting phones do not pile up hooks).
+  // preClose runs before the server waits for connections to end; onClose would come too late and shutdown would hang.
+  const open = new Set<() => void>();
+  app.addHook("preClose", async () => {
+    for (const close of [...open]) close();
+  });
+
   app.get("/events", (request, reply) => {
     reply.hijack();
     const res = reply.raw;
@@ -37,12 +44,14 @@ export function registerEvents(app: FastifyInstance, bus: EventBus): void {
     const cleanup = () => {
       clearInterval(heartbeat);
       unsubscribe();
+      open.delete(close);
     };
-    request.raw.on("close", cleanup);
-    // Fastify's onClose does not end hijacked streams on its own.
-    app.addHook("onClose", async () => {
+    // Fastify does not end hijacked streams on its own, so the shared hook ends each one.
+    const close = () => {
       cleanup();
       res.end();
-    });
+    };
+    open.add(close);
+    request.raw.on("close", cleanup);
   });
 }
