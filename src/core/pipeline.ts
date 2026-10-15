@@ -193,7 +193,7 @@ export class Pipeline implements TaskDriver {
 
     const tests = project.test_command ? await this.verify(task.id, project.test_command, prepared.worktree) : null;
 
-    const lines = [`הבונה סיים את משימה #${task.id} בענף ${prepared.branch}.`, out.handoff.summary, `קבצים ששונו (${files.length}): ${files.join(", ")}`];
+    const lines = [`הבונה סיים את משימה #${task.id} בענף ${prepared.branch}\u200F.`, out.handoff.summary, `קבצים ששונו (${files.length}):\n${files.join("\n")}`];
     if (out.handoff.open_items.length > 0) lines.push(`שים לב: ${out.handoff.open_items.join("; ")}`);
     if (tests) lines.push(tests);
     if (plan?.needs_approval) lines.push("המתכנן סימן את המשימה כרגישה, כדאי לבדוק היטב לפני אישור.");

@@ -22,7 +22,7 @@ a { color: var(--accent); text-decoration: none; }
 bdi, .ltr { unicode-bidi: isolate; direction: ltr; }
 main { padding: 14px 16px calc(96px + env(safe-area-inset-bottom)); max-width: 640px; margin: 0 auto; display: grid; gap: 14px; align-content: start; }
 .muted { color: var(--muted); } .error { color: var(--bad); font-size: .92rem; } .small { font-size: .85rem; }
-.pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.pre { white-space: pre-wrap; overflow-wrap: anywhere; unicode-bidi: plaintext; text-align: right; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 

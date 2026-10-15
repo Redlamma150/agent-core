@@ -103,6 +103,7 @@ function TaskView({ t, reload }: { t: TaskRow; reload: () => void }) {
 
       <details className="card" open={t.status === "blocked" || t.status === "stopped"}>
         <summary>היסטוריה</summary>
+        {(steps.data ?? []).length === 0 && <p className="muted small">עדיין אין היסטוריה למשימה הזאת.</p>}
         <ol className="timeline">
           {(steps.data ?? []).map((s) => (
             <li key={s.id} className={s.to_status === "blocked" || s.status === "agent_error" || s.status === "tests_failed" ? "bad" : s.to_status === "merged" || s.status === "tests_passed" ? "good" : s.to_status === "awaiting_approval" ? "need" : ""}>
