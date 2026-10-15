@@ -41,8 +41,23 @@ export function countTokens(result: SDKResultMessage): number {
   return Object.values(result.modelUsage ?? {}).reduce((sum, m) => sum + m.inputTokens + m.outputTokens + m.cacheCreationInputTokens, 0);
 }
 
+/**
+ * Environment variables an agent may see: only what the CLI needs to run and to log in to the Claude subscription.
+ * An allowlist, so any new secret the core gets (tokens, VAPID keys) is hidden from agents by default.
+ */
+const AGENT_ENV_ALLOWED = [
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM",
+  "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN",
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS",
+];
+
+export function agentEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> {
+  return Object.fromEntries(AGENT_ENV_ALLOWED.filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
+}
+
 export class AgentRunner {
-  constructor(private db: Db, private tasks: TaskService, private queryFn: QueryFn = defaultQuery, private activity?: ActivityService) {}
+  /** `protectedPaths`: files and folders of the core itself (.env, database) that agents must never read. */
+  constructor(private db: Db, private tasks: TaskService, private queryFn: QueryFn = defaultQuery, private activity?: ActivityService, private protectedPaths: string[] = []) {}
 
   /** Runs one agent call, validates its output against the handoff contract and logs it to llm_calls. */
   async run(req: RunRequest): Promise<RunResult> {
@@ -61,6 +76,8 @@ export class AgentRunner {
         cwd: req.cwd,
         tools: req.tools,
         allowedTools: req.allowedTools,
+        // "//abs/path" is the permission-rule syntax for an absolute path. Denied for every tool that can read files.
+        disallowedTools: this.protectedPaths.flatMap((p) => [`Read(/${p})`, `Read(/${p}/**)`, `Edit(/${p})`, `Edit(/${p}/**)`]),
         permissionMode: req.permissionMode,
         maxTurns: req.maxTurns ?? 30,
         outputFormat: { type: "json_schema", schema: handoffJsonSchema },
@@ -71,8 +88,8 @@ export class AgentRunner {
         mcpServers: {},
         settings: { disableClaudeAiConnectors: true },
         abortController: abort,
-        // Agents must run on the Claude subscription: never hand the SDK an API key, even if one leaks into the environment.
-        env: { ...process.env, ANTHROPIC_API_KEY: undefined },
+        // Agents run on the Claude subscription (never an API key) and see none of the core's secrets: see agentEnv.
+        env: agentEnv(),
       };
       for await (const message of this.queryFn({ prompt: req.prompt, options })) {
         if (message.type === "result") result = message;

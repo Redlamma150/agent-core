@@ -20,7 +20,6 @@ export const BUILDER_ALLOWED = [
   "Bash(npm test:*)",
   "Bash(npm run:*)",
   "Bash(npx vitest:*)",
-  "Bash(node:*)",
   "Bash(git status:*)",
   "Bash(git diff:*)",
   "Bash(git log:*)",
