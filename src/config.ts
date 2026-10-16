@@ -34,6 +34,11 @@ const schema = z.object({
   /** Longest a single task may run before it is parked as blocked, so one stuck task cannot hold up the queue. */
   TASK_TIMEOUT_MINUTES: positiveInt("TASK_TIMEOUT_MINUTES").default(45),
   STATIC_DIR: required("STATIC_DIR").default("./app/dist"),
+  /** Turn voice recordings into text on this computer with Whisper (needs the `whisper` command and ffmpeg). */
+  TRANSCRIBE: z.enum(["true", "false"], { error: "Env var TRANSCRIBE must be true or false" }).default("true"),
+  WHISPER_COMMAND: z.string().default("whisper"),
+  WHISPER_MODEL: z.string().default("medium"),
+  WHISPER_LANGUAGE: z.string().default("he"),
   /** The hour (0-23, local time) a task scheduled for "tonight" starts. */
   NIGHT_HOUR: z.coerce.number({ error: "Env var NIGHT_HOUR must be a number" }).int().min(0, "Env var NIGHT_HOUR must be 0-23").max(23, "Env var NIGHT_HOUR must be 0-23").default(2),
   /** Take before and after screenshots of the page a task changed, for the approval screen. */

@@ -17,7 +17,7 @@ export function State<T>({ q, children, skeletons = 2 }: { q: Loaded<T>; childre
 }
 
 /** Errors whose message the core wrote for the owner (in Hebrew): upload rules, computer-only actions, project checks. */
-const FRIENDLY = new Set(["media", "local_only", "local_unavailable", "invalid_project", "not_found", "merge_failed", "busy", "operator_failed"]);
+const FRIENDLY = new Set(["media", "local_only", "local_unavailable", "invalid_project", "not_found", "merge_failed", "busy", "operator_failed", "transcribe_failed"]);
 
 export function errorText(err: unknown): string {
   if (err instanceof ApiError) {

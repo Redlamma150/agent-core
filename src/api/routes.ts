@@ -10,6 +10,7 @@ import { basename } from "node:path";
 import { LocalActionError, isLocalRequest, type LocalActions } from "../core/local.js";
 import { ALLOWED_MIME, MAX_FILE_BYTES, MediaError, type MediaService } from "../core/media.js";
 import { OperatorBusyError, OperatorFailedError, MAX_HISTORY, MAX_TEXT, type OperatorService } from "../core/operator.js";
+import { AUDIO_MIME, MAX_AUDIO_BYTES, looksLikeAudio, TranscribeError, type TranscribeService } from "../core/transcribe.js";
 import { UnknownInsightError, type InsightService } from "../core/insights.js";
 import { nextNight } from "../core/scheduler.js";
 import { registerProject } from "../core/projects.js";
@@ -49,9 +50,10 @@ export interface Services {
   operator?: OperatorService;
   insights?: InsightService;
   settings?: SettingsService;
+  transcribe?: TranscribeService;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings, nightHour = 2 }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings, nightHour = 2, transcribe }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message, reason: err.reason });
@@ -61,6 +63,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
       _req.log.error({ err: err.message.slice(0, 200) }, "operator failed");
       return reply.code(502).send({ error: "operator_failed", message: "המתפעל לא הצליח לענות. נסה שוב." });
     }
+    if (err instanceof TranscribeError) return reply.code(422).send({ error: "transcribe_failed", message: err.message });
     if (err instanceof UnknownInsightError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MediaError) return reply.code(400).send({ error: "media", message: err.message });
     if (err instanceof LocalActionError) return reply.code(501).send({ error: "local_unavailable", message: err.message });
@@ -284,7 +287,16 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
       return insights.list();
     });
   }
-  app.get("/settings", async () => ({ auto_stash: settings?.autoStash() ?? false, night_hour: nightHour }));
+  app.get("/settings", async () => ({ auto_stash: settings?.autoStash() ?? false, night_hour: nightHour, transcribe: (await transcribe?.available()) ?? false }));
+  // A recording in, its text out. The audio is never stored.
+  app.addContentTypeParser([...AUDIO_MIME], { parseAs: "buffer", bodyLimit: MAX_AUDIO_BYTES }, (_req, body, done) => done(null, body));
+  app.post("/transcribe", async (req, reply) => {
+    if (!transcribe || !(await transcribe.available())) return reply.code(501).send({ error: "local_unavailable", message: "התמלול לא מותקן במחשב. צריך את Whisper ו-ffmpeg." });
+    const mime = (req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+    if (!Buffer.isBuffer(req.body) || !looksLikeAudio(mime, req.body)) throw new TranscribeError("זה לא קובץ הקלטה שאני מכיר.");
+    if (req.body.length < 1000) throw new TranscribeError("ההקלטה קצרה מדי.");
+    return { text: await transcribe.transcribe(req.body, mime) };
+  });
   app.put("/settings", async (req, reply) => {
     if (!settings) return reply.code(501).send({ error: "not_implemented" });
     const body = z.object({ auto_stash: z.boolean().optional() }).parse(req.body);

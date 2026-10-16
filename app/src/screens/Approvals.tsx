@@ -5,6 +5,7 @@ import { describeChange, relativeTime, STAGES, taskTitle, type FileChange, type 
 import { AiBadge, Icon, InnerBar, Sheet, Soon, StatusPill, TopBar } from "../ui";
 import { useUndo, type MergeFailure } from "../undo";
 import { coreMessage, errorText, State } from "./common";
+import { clock, useVoice, useVoiceAvailable } from "../lib/voice";
 import { PreviewFrame, useShots } from "./Preview";
 
 export interface ApprovalRow {
@@ -210,6 +211,9 @@ function RejectSheet({ onClose, onSend }: { onClose: () => void; onSend: (note: 
   const [note, setNote] = useState("");
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
+  const { notify } = useUndo();
+  const available = useVoiceAvailable();
+  const voice = useVoice((text) => { setNote((n) => (n.trim() ? `${n.trimEnd()}\n${text}` : text)); setError(false); }, notify);
   async function send() {
     if (note.trim() === "") return setError(true);
     setBusy(true);
@@ -220,7 +224,12 @@ function RejectSheet({ onClose, onSend }: { onClose: () => void; onSend: (note: 
     <Sheet title="מה לתקן?" onClose={onClose}>
       <textarea className="field" style={{ height: 110 }} aria-label="הערה לבונה" placeholder="למשל: הכותרת ארוכה מדי בנייד" value={note} onChange={(e) => { setNote(e.target.value); setError(false); }} />
       {error && <span className="err" role="alert">דחייה דורשת הערה</span>}
-      <div className="row wrap"><Soon>צילום מסך עם סימון</Soon><Soon>הקלטה</Soon></div>
+      <div className="row wrap">
+        <Soon>צילום מסך עם סימון</Soon>
+        <button type="button" className={`chip ${voice.state === "recording" ? "recording" : ""}`} disabled={!available || voice.state === "transcribing"} aria-pressed={voice.state === "recording"} onClick={voice.toggle}>
+          {voice.state === "recording" ? `עצור (${clock(voice.seconds)})` : voice.state === "transcribing" ? "מתמלל…" : available ? "הקלטה" : "הקלטה (לא מותקן)"}
+        </button>
+      </div>
       <div className="row">
         <button type="button" className="btn pri grow" disabled={busy} onClick={send}>שלח לבונה</button>
         <button type="button" className="btn grow" onClick={onClose}>ביטול</button>

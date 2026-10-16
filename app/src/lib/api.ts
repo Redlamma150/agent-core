@@ -130,3 +130,18 @@ export function consumeTokenFromHash(): void {
   }
   window.history.replaceState(null, "", `${window.location.pathname}#/tasks`);
 }
+
+/** Sends a recording to the core, which turns it into text on the computer. The audio is not kept. */
+export async function transcribeAudio(blob: Blob): Promise<string> {
+  const token = tokenStore.get();
+  if (!token) throw new ApiError(401, null);
+  const type = (blob.type.split(";")[0] || "audio/webm").toLowerCase();
+  const res = await fetch("/transcribe", { method: "POST", headers: headers(token, { "content-type": type }), body: blob });
+  if (res.status === 401) {
+    onUnauthorized();
+    throw new ApiError(401, null);
+  }
+  const body = (await res.json().catch(() => null)) as { text?: string } | null;
+  if (!res.ok) throw new ApiError(res.status, body);
+  return body?.text ?? "";
+}
