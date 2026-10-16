@@ -10,6 +10,7 @@ import { MediaService } from "./core/media.js";
 import { ApprovalService } from "./core/approvals.js";
 import { BudgetService } from "./core/budget.js";
 import { GitService } from "./core/git.js";
+import { keepAwake } from "./core/awake.js";
 import { OperatorService } from "./core/operator.js";
 import { Pipeline } from "./core/pipeline.js";
 import { dirname, join } from "node:path";
@@ -17,6 +18,7 @@ import { TaskService } from "./core/tasks.js";
 import { openDb } from "./db/index.js";
 
 const config = loadConfig();
+if (config.KEEP_AWAKE === "true" && keepAwake()) console.log("keeping the computer awake while the core runs (KEEP_AWAKE=false to turn this off)");
 const db = openDb(config.DB_PATH);
 const bus = new EventBus();
 const tasks = new TaskService(db, bus);

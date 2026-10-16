@@ -260,8 +260,11 @@ describe("token cap", () => {
     const out = await t.run();
     expect(out).toEqual({ kind: "stopped", reason: "token cap reached" });
     expect(t.tasks.get(t.task.id)).toMatchObject({ status: "stopped", tokens_used: 1050 });
-    const warnings = t.events.filter((e) => e.type === "budget");
-    expect(warnings).toEqual([{ type: "budget", data: { task_id: t.task.id, percent: 80 } }]);
+    const alerts = t.events.filter((e) => e.type === "budget");
+    expect(alerts).toEqual([
+      { type: "budget", data: { task_id: t.task.id, percent: 80 } },
+      { type: "budget", data: { task_id: t.task.id, percent: 100 } },
+    ]);
     expect(t.db.prepare("SELECT COUNT(*) AS n FROM steps WHERE status = 'budget_warning'").get()).toEqual({ n: 1 });
   });
 

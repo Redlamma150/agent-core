@@ -93,6 +93,8 @@ export class TaskService {
     apply();
     const task = this.get(id);
     this.bus?.publish({ type: "task", data: { id, status: task.status } });
+    // A separate event, only for the moment a task gets stuck: the owner is notified once, not on every later edit.
+    if (to === "blocked") this.bus?.publish({ type: "blocked", data: { task_id: id } });
     return task;
   }
 
