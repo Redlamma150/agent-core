@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { disablePush, enablePush, pushEnabled, pushSupported } from "../lib/push";
+import { useApi } from "../hooks";
+import { api } from "../lib/api";
 import { InnerBar, Toggle } from "../ui";
 import { useUndo } from "../undo";
 
@@ -7,6 +9,7 @@ import { useUndo } from "../undo";
 export function SettingsScreen({ onLogout }: { onLogout: () => void }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const { notify } = useUndo();
+  const core = useApi<{ auto_stash: boolean }>("/settings");
 
   useEffect(() => {
     void pushEnabled().then(setEnabled, () => setEnabled(false));
@@ -41,7 +44,12 @@ export function SettingsScreen({ onLogout }: { onLogout: () => void }) {
             : <div className="muted">המכשיר לא תומך בהתראות. באייפון צריך קודם להוסיף את האפליקציה למסך הבית.</div>}
           <Toggle label="סיכום יומי" sub="הודעה אחת בסוף היום" checked={false} soon />
           <Toggle label="המשך אוטומטי אחרי מכסה" sub="משימה שהושהתה תמשיך כשהמכסה מתחדשת" checked={false} soon />
-          <Toggle label="שמור שינויים בצד לפני מיזוג" sub="כך שינויים שלא נשמרו לא יעצרו מיזוג" checked={false} soon />
+          <Toggle
+            label="שמור שינויים בצד לפני מיזוג"
+            sub="שינויים שלא נשמרו בפרויקט לא יעצרו מיזוג. הם חוזרים אחריו"
+            checked={core.data?.auto_stash === true}
+            onChange={core.data === null ? undefined : () => api("/settings", { method: "PUT", body: { auto_stash: !core.data?.auto_stash } }).then(core.reload, () => notify("לא הצלחתי לעדכן את ההגדרה."))}
+          />
           <Toggle label="עצור משימה שתקועה 45 דקות" sub="כבר פעיל תמיד. ניתן להגדרה בקובץ ההגדרות של הליבה" checked={true} soon />
         </div>
 

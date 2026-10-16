@@ -1,4 +1,6 @@
 import { MergeError } from "../src/core/git.js";
+import { InsightService } from "../src/core/insights.js";
+import { SettingsService } from "../src/core/settings.js";
 import { networkInterfaces } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp, startServers } from "../src/api/server.js";
@@ -178,6 +180,25 @@ describe("merge failures, stash and revert", () => {
     expect(reverted.json()).toMatchObject({ status: "merged", reverted_at: expect.any(String) });
     expect((await post(app, "/tasks/1/unrevert", {})).json().reverted_at).toBeNull();
     expect((await post(app, "/tasks/abc/revert", {})).statusCode).toBe(400);
+  });
+});
+
+describe("insights and settings", () => {
+  it("lists, applies and unapplies suggestions, and keeps the stash switch", async () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p', '/r')").run();
+    const settings = new SettingsService(db);
+    const app = buildApp({ db, accessToken: TOKEN, ...services(db), settings, insights: new InsightService(db, settings) });
+    const send = (method: "GET" | "POST" | "PUT", url: string, payload?: object) => app.inject({ method, url, headers: auth, payload });
+
+    expect((await send("GET", "/insights")).json()).toEqual([]);
+    expect((await send("POST", "/insights/nope/apply")).statusCode).toBe(404);
+    const applied = await send("POST", "/insights/auto_stash/apply");
+    expect(applied.json()).toMatchObject([{ id: "auto_stash", applied: true }]);
+    expect((await send("GET", "/settings")).json()).toEqual({ auto_stash: true });
+    expect((await send("POST", "/insights/auto_stash/unapply")).json()).toEqual([]);
+    expect((await send("PUT", "/settings", { auto_stash: true })).json()).toEqual({ auto_stash: true });
+    expect((await send("PUT", "/settings", { auto_stash: "yes" })).statusCode).toBe(400);
   });
 });
 

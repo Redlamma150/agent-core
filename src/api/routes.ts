@@ -10,7 +10,9 @@ import { basename } from "node:path";
 import { LocalActionError, isLocalRequest, type LocalActions } from "../core/local.js";
 import { ALLOWED_MIME, MAX_FILE_BYTES, MediaError, type MediaService } from "../core/media.js";
 import { OperatorBusyError, OperatorFailedError, MAX_HISTORY, MAX_TEXT, type OperatorService } from "../core/operator.js";
+import { UnknownInsightError, type InsightService } from "../core/insights.js";
 import { registerProject } from "../core/projects.js";
+import type { SettingsService } from "../core/settings.js";
 import { InvalidActionError, InvalidTransitionError, NotFoundError, type TaskService } from "../core/tasks.js";
 
 const notImplemented = (reply: FastifyReply, milestone: string) =>
@@ -40,9 +42,11 @@ export interface Services {
   media?: MediaService;
   local?: LocalActions;
   operator?: OperatorService;
+  insights?: InsightService;
+  settings?: SettingsService;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message, reason: err.reason });
@@ -52,6 +56,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
       _req.log.error({ err: err.message.slice(0, 200) }, "operator failed");
       return reply.code(502).send({ error: "operator_failed", message: "המתפעל לא הצליח לענות. נסה שוב." });
     }
+    if (err instanceof UnknownInsightError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MediaError) return reply.code(400).send({ error: "media", message: err.message });
     if (err instanceof LocalActionError) return reply.code(501).send({ error: "local_unavailable", message: err.message });
     if (err instanceof Error && "statusCode" in err && err.statusCode === 413) return reply.code(413).send({ error: "media", message: "הקובץ גדול מדי (עד 15MB)." });
@@ -254,6 +259,23 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
 
   app.get("/projects/active", async (_req, reply) => notImplemented(reply, "M6"));
   app.post("/projects/active", async (_req, reply) => notImplemented(reply, "M6"));
+
+  app.get("/insights", async () => insights?.list() ?? []);
+  for (const path of ["apply", "unapply"] as const) {
+    app.post<{ Params: { id: string } }>(`/insights/:id/${path}`, async (req, reply) => {
+      if (!insights) return reply.code(501).send({ error: "not_implemented" });
+      if (path === "apply") insights.apply(req.params.id);
+      else insights.unapply(req.params.id);
+      return insights.list();
+    });
+  }
+  app.get("/settings", async () => ({ auto_stash: settings?.autoStash() ?? false }));
+  app.put("/settings", async (req, reply) => {
+    if (!settings) return reply.code(501).send({ error: "not_implemented" });
+    const body = z.object({ auto_stash: z.boolean().optional() }).parse(req.body);
+    if (body.auto_stash !== undefined) settings.setAutoStash(body.auto_stash);
+    return { auto_stash: settings.autoStash() };
+  });
 
   app.get("/usage", async () => {
     const sum = "COUNT(*) AS calls, COALESCE(SUM(input_tokens),0) AS input_tokens, COALESCE(SUM(output_tokens),0) AS output_tokens";

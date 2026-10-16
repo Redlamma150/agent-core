@@ -28,6 +28,8 @@ export interface RouteInput {
   flagged: boolean;
   /** Confidence reported by the previous valid result, if any. */
   lastConfidence?: number;
+  /** A model the owner routed this role to (an applied suggestion). Escalation still goes to the strong model. */
+  modelOverride?: string;
 }
 
 export type Route =
@@ -46,7 +48,7 @@ export function escalationReasons(i: RouteInput): string[] {
 export function route(i: RouteInput): Route {
   const reasons = escalationReasons(i);
   if (reasons.length === 0) {
-    return { action: "run", model: i.escalations > 0 ? ESCALATION_MODEL : MODEL_BY_ROLE[i.role], escalate: false, reasons };
+    return { action: "run", model: i.escalations > 0 ? ESCALATION_MODEL : (i.modelOverride ?? MODEL_BY_ROLE[i.role]), escalate: false, reasons };
   }
   if (i.escalations >= MAX_ESCALATIONS) {
     return { action: "block", reasons: [...reasons, `escalation limit (${MAX_ESCALATIONS}) reached`] };

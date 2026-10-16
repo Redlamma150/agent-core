@@ -10,6 +10,8 @@ export interface Scheduled {
   /** What the lists should show meanwhile. */
   task?: { id: number; patch: Partial<TaskRow> };
   approvalId?: number;
+  /** Names the thing being changed (for example "insight:auto_stash"), so a screen can show it as done while waiting. */
+  key?: string;
   commit: () => Promise<unknown>;
   /** Turns a failure into the message shown to the owner; defaults to the generic one. */
   onError?: (err: unknown) => string;
@@ -21,6 +23,7 @@ interface UndoApi {
   notify: (text: string) => void;
   applyTask: (t: TaskRow) => TaskRow;
   approvalHidden: (id: number) => boolean;
+  isPending: (key: string) => boolean;
   /** Why the last merge of an approval failed, in the core's own words. Cleared when the owner tries again. */
   mergeErrors: Record<number, MergeFailure>;
   setMergeError: (approvalId: number, failure: MergeFailure | null) => void;
@@ -121,6 +124,7 @@ export function UndoProvider({ children, low, onSettled }: { children: ReactNode
       return out;
     },
     approvalHidden: (id) => entries.some((e) => e.approvalId === id),
+    isPending: (key) => entries.some((e) => e.key === key),
     mergeErrors,
     setMergeError: (id, failure) => setMergeErrors((m) => {
       const next = { ...m };

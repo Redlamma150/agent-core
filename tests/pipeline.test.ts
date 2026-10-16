@@ -9,6 +9,7 @@ import { BudgetService } from "../src/core/budget.js";
 import { MergeError } from "../src/core/git.js";
 import { MediaService } from "../src/core/media.js";
 import { ScreenshotService } from "../src/core/screenshots.js";
+import { SettingsService } from "../src/core/settings.js";
 import { Pipeline } from "../src/core/pipeline.js";
 import { TaskService } from "../src/core/tasks.js";
 import { openDb } from "../src/db/index.js";
@@ -166,6 +167,24 @@ describe("pipeline", () => {
     expect(t.tasks.get(t.task.id).status).toBe("merged");
     expect(readFileSync(join(t.repo, "README.md"), "utf8")).toBe("owner is editing\n");
     expect(existsSync(join(t.repo, "hello.txt"))).toBe(true);
+  });
+
+  it("merges over unsaved changes without asking when the automatic stash is on, and counts the blocks that led to it", async () => {
+    const t = await setup();
+    const settings = new SettingsService(t.db);
+    (t.pipeline as unknown as { d: { settings: SettingsService } }).d.settings = settings;
+    t.pipeline.start(t.task.id);
+    await t.pipeline.idle();
+    writeFileSync(join(t.repo, "README.md"), "owner is editing\n");
+    const approval = t.approvals.pending()[0]!;
+
+    await expect(t.pipeline.resolveApproval(approval.id, true)).rejects.toThrow(MergeError);
+    expect(t.db.prepare("SELECT COUNT(*) AS n FROM steps WHERE status = 'merge_failed_dirty'").get()).toEqual({ n: 1 });
+
+    settings.setAutoStash(true);
+    await t.pipeline.resolveApproval(approval.id, true);
+    expect(t.tasks.get(t.task.id).status).toBe("merged");
+    expect(readFileSync(join(t.repo, "README.md"), "utf8")).toBe("owner is editing\n");
   });
 
   it("reverts a merged task and merges it back, keeping the task merged", async () => {

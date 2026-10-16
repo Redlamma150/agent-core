@@ -1,7 +1,57 @@
-import { useApi } from "../hooks";
+import { useApi, useConnected } from "../hooks";
+import { api } from "../lib/api";
 import { formatNumber } from "../lib/format";
 import { TopBar } from "../ui";
-import { State } from "./common";
+import { useUndo } from "../undo";
+import { errorText, State } from "./common";
+
+interface Tip { id: string; title: string; body: string; gain: string; applied: boolean }
+
+/** Suggestions from what the system actually ran. Applying one has the 5 second undo window; an applied one can be switched off. */
+function Tips() {
+  const tips = useApi<Tip[]>("/insights");
+  const { schedule, isPending, notify } = useUndo();
+  const connected = useConnected();
+  async function switchOff(id: string) {
+    try {
+      await api(`/insights/${id}/unapply`, { method: "POST", body: {} });
+      tips.reload();
+    } catch (err) {
+      notify(errorText(err));
+    }
+  }
+  return (
+    <>
+      <h2 className="h2">הצעות ייעול</h2>
+      <State q={tips}>
+        {(list) => list.length === 0 ? (
+          <div className="card center"><div className="muted">אין הצעות כרגע. הן מבוססות על מה שהמערכת הריצה, ויופיעו כשיהיה מספיק מידע.</div></div>
+        ) : list.map((t) => {
+          const waiting = isPending(`insight:${t.id}`);
+          const on = t.applied || waiting;
+          return (
+            <div key={t.id} className="card">
+              <div className="ttl">{t.title}</div>
+              <p className="txt">{t.body}</p>
+              <div className="row between wrap">
+                <span className="muted">{t.gain}</span>
+                <div className="row">
+                  {t.applied && !waiting && <button type="button" className="btn ghost sm" disabled={!connected} onClick={() => void switchOff(t.id)}>בטל החלה</button>}
+                  <button
+                    type="button"
+                    className={`btn sm ${on ? "" : "pri"}`}
+                    disabled={on || !connected}
+                    onClick={() => schedule({ key: `insight:${t.id}`, text: "ההצעה הוחלה", commit: () => api(`/insights/${t.id}/apply`, { method: "POST", body: {} }), onError: errorText })}
+                  >{on ? "הוחל" : "החל"}</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </State>
+    </>
+  );
+}
 
 interface Window { calls: number; input_tokens: number; output_tokens: number }
 interface Usage extends Window {
@@ -50,8 +100,7 @@ export function InsightsScreen() {
                     ))}
                   </div>
                 )}
-                <h2 className="h2">הצעות ייעול</h2>
-                <div className="card center soon"><div className="muted">הצעות לחיסכון בצריכה יופיעו כאן, עם כפתור להחלה. <span className="soon-tag">בקרוב</span></div></div>
+                <Tips />
               </>
             );
           }}

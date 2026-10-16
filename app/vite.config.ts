@@ -29,6 +29,6 @@ export default defineConfig({
   ],
   // In development the API runs on the core's port; the built app is served by the core itself.
   server: {
-    proxy: Object.fromEntries(["/tasks", "/approvals", "/usage", "/events", "/projects", "/chat", "/push"].map((p) => [p, "http://127.0.0.1:8787"])),
+    proxy: Object.fromEntries(["/tasks", "/approvals", "/usage", "/events", "/projects", "/chat", "/push", "/insights", "/settings"].map((p) => [p, "http://127.0.0.1:8787"])),
   },
 });
