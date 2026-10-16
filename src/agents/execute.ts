@@ -28,6 +28,7 @@ export async function executeAgent(
     if (budget.enforce(id) === "stop") return { kind: "stopped", reason: "token cap reached" };
     const task = tasks.get(id);
     if (task.status === "stopped") return { kind: "stopped", reason: "stopped by owner" };
+    if (task.status === "blocked") return { kind: "blocked", reasons: ["blocked while running (time limit)"] };
 
     const decision = route({ role: req.role, consecutiveFailures: task.failures, escalations: task.escalations, flagged: task.flagged === 1, lastConfidence });
     if (decision.action === "block") {
@@ -42,7 +43,9 @@ export async function executeAgent(
 
     const res = await runner.run({ ...req, model: decision.model, escalated: decision.escalate });
     if (budget.enforce(id) === "stop") return { kind: "stopped", reason: "token cap reached" };
-    if (tasks.get(id).status === "stopped") return { kind: "stopped", reason: "stopped by owner" };
+    const after = tasks.get(id).status;
+    if (after === "stopped") return { kind: "stopped", reason: "stopped by owner" };
+    if (after === "blocked") return { kind: "blocked", reasons: ["blocked while running (time limit)"] };
 
     if (!res.ok || res.handoff.status === "failed") {
       tasks.note(id, "agent_error", res.ok ? `${req.role} reported failure: ${res.handoff.summary}` : `${req.role}: ${res.reason}`);
