@@ -1,11 +1,20 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { useApi } from "../hooks";
+import { useEffect, useState } from "react";
+import { useApi, useConnected } from "../hooks";
 import { api, uploadFile } from "../lib/api";
+import { Icon, Segmented, Toggle } from "../ui";
 import { errorText, State } from "./common";
-import { FilePicker } from "./media";
+import { AttachmentChips, fileProblem, MAX_FILES, MediaButtons } from "./media";
 
 interface Project { id: number; name: string }
 const LAST_PROJECT = "agent-core-last-project";
+
+/** Starting points that fill the text field. The owner edits them before sending. */
+const TEMPLATES = [
+  { label: "תיקון באג", text: "לתקן באג: \n\nמה קורה היום:\nמה אמור לקרות:" },
+  { label: "שינוי עיצוב", text: "לשנות את העיצוב של: \n\nמה לשנות:" },
+  { label: "תכונה חדשה", text: "להוסיף תכונה: \n\nמה היא צריכה לעשות:" },
+  { label: "בדיקות", text: "להוסיף בדיקות ל: " },
+];
 
 const remembered = (): string | null => {
   try {
@@ -19,11 +28,13 @@ export function NewTaskScreen({ projectId }: { projectId?: number }) {
   const projects = useApi<Project[]>("/projects");
   return (
     <>
-      <a className="back" href="#/tasks">‹ חזרה</a>
-      <h2>משימה חדשה</h2>
-      <State q={projects}>
+      <header className="top">
+        <h1 className="h1s">משימה חדשה</h1>
+        <a className="iconbtn" href="#/tasks" aria-label="סגירה"><Icon name="close" size={18} width={2.4} /></a>
+      </header>
+      <State q={projects} skeletons={3}>
         {(list) => (list.length === 0
-          ? <div className="card"><strong>אין פרויקטים רשומים</strong><span className="muted small">רשום פרויקט במחשב עם <bdi>npm run project:add</bdi> ואז חזור לכאן.</span></div>
+          ? <div className="body"><div className="card"><div className="ttl">אין פרויקטים רשומים</div><div className="muted">אפשר להוסיף פרויקט ממסך הפרויקטים כשהאפליקציה פתוחה מהמחשב.</div><a className="btn" href="#/projects">לפרויקטים</a></div></div>
           : <Form projects={list} initial={projectId} />)}
       </State>
     </>
@@ -36,9 +47,12 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
   const [description, setDescription] = useState("");
   const [flagged, setFlagged] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
+  const [fileErrors, setFileErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [needText, setNeedText] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState<{ id: number; failed: string[] } | null>(null);
+  const connected = useConnected();
 
   useEffect(() => {
     try {
@@ -48,13 +62,28 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
     }
   }, [projectId]);
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  function addFiles(picked: File[]) {
+    const bad: string[] = [];
+    const next = [...files];
+    for (const f of picked) {
+      const problem = fileProblem(f);
+      if (problem) bad.push(problem);
+      else if (next.length >= MAX_FILES) bad.push(`אפשר עד ${MAX_FILES} קבצים`);
+      else next.push(f);
+    }
+    setFileErrors(bad);
+    setFiles(next);
+  }
+
+  async function submit() {
+    // Files can carry the whole request, so the text is only required when there are none.
+    if (description.trim() === "" && files.length === 0) return setNeedText(true);
     setBusy(true);
     setError(null);
     try {
+      const text = description.trim() || "בצע לפי הקבצים המצורפים.";
       // Created on hold, files uploaded, then started: the agent sees the files from its very first step.
-      const task = await api<{ id: number }>("/tasks", { method: "POST", body: { project_id: Number(projectId), description: description.trim(), flagged, hold: files.length > 0 } });
+      const task = await api<{ id: number }>("/tasks", { method: "POST", body: { project_id: Number(projectId), description: text, flagged, hold: files.length > 0 } });
       if (files.length > 0) {
         const failed: string[] = [];
         for (const f of files) await uploadFile(task.id, f).catch(() => failed.push(f.name));
@@ -74,37 +103,65 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
 
   if (partial) {
     return (
-      <div className="callout need">
-        <strong>המשימה התחילה, אבל לא כל הקבצים עלו</strong>
-        <span className="small">לא הועלו: <bdi>{partial.failed.join(", ")}</bdi>. אפשר להוסיף אותם במסך המשימה.</span>
-        <a className="pill" href={`#/tasks/${partial.id}`}>למשימה ›</a>
+      <div className="body">
+        <div className="card strong">
+          <div className="ttl">המשימה התחילה, אבל לא כל הקבצים עלו</div>
+          <div className="muted">לא הועלו: <bdi>{partial.failed.join(", ")}</bdi>. אפשר להוסיף אותם בגלריה של המשימה.</div>
+          <a className="btn pri" href={`#/tasks/${partial.id}`}>למשימה</a>
+        </div>
       </div>
     );
   }
   return (
-    <form className="stack" onSubmit={submit}>
-      <fieldset className="card" style={{ margin: 0 }}>
-        <legend className="muted small">באיזה פרויקט?</legend>
-        <div className="choices">
-          {projects.map((p) => (
-            <label key={p.id} className="choice">
-              <input type="radio" name="project" value={p.id} checked={projectId === String(p.id)} onChange={() => setProjectId(String(p.id))} />
-              {p.name}
-            </label>
-          ))}
+    <>
+      <div className="body has-bar one">
+        <div className="group">
+          <span className="label">פרויקט</span>
+          <div className="row wrap">
+            {projects.map((p) => (
+              <button key={p.id} type="button" className="chip" aria-pressed={projectId === String(p.id)} onClick={() => setProjectId(String(p.id))}><span className="mono">{p.name}</span></button>
+            ))}
+          </div>
         </div>
-      </fieldset>
-      <div className="card">
-        <label htmlFor="desc">מה לבצע? השורה הראשונה תהיה הכותרת</label>
-        <textarea id="desc" rows={6} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={"למשל:\nלבנות עמוד נחיתה לגיג של אוטומציית לידים"} required autoFocus />
-        <FilePicker files={files} onChange={setFiles} />
-        <label className="choice">
-          <input type="checkbox" checked={flagged} onChange={(e) => setFlagged(e.target.checked)} />
-          <span>משימה רגישה או מורכבת (תרוץ על המודל החזק, צורכת יותר)</span>
-        </label>
+
+        <div className="group">
+          <label className="label" htmlFor="nt-text">מה לבצע</label>
+          <textarea id="nt-text" className="field" style={{ height: 120 }} placeholder="השורה הראשונה תהיה הכותרת" value={description} onChange={(e) => { setDescription(e.target.value); setNeedText(false); }} />
+          {needText && <span className="err" role="alert">כתוב מה לבצע, או צרף קובץ</span>}
+          <div className="row wrap">
+            <span className="muted">תבניות:</span>
+            {TEMPLATES.map((t) => <button key={t.label} type="button" className="chip" onClick={() => { setDescription(t.text); setNeedText(false); }}>{t.label}</button>)}
+          </div>
+        </div>
+
+        <div className="group">
+          <span className="label">מדיה</span>
+          <MediaButtons onPick={addFiles} disabled={files.length >= MAX_FILES} />
+          <AttachmentChips files={files} onRemove={(i) => setFiles(files.filter((_, j) => j !== i))} />
+          {fileErrors.map((e) => <span key={e} className="err" role="alert">{e}</span>)}
+          <span className="muted">הסוכן רואה את התמונות ואת ה-PDF. הקלטה תגיע כשיהיה תמלול.</span>
+        </div>
+
+        <div className="group">
+          <span className="label">מי יטפל</span>
+          <Segmented label="מי יטפל" value="auto" onChange={() => undefined} options={[{ value: "auto", label: "אוטומטי" }, { value: "claude", label: "Claude", disabled: true }]} />
+          <span className="muted">המערכת בוחרת לבד. כרגע הכול רץ על Claude, ובחירה ידנית של ספק תגיע בהמשך.</span>
+        </div>
+
+        <div className="group">
+          <span className="label">מתי</span>
+          <Segmented label="מתי" value="now" onChange={() => undefined} options={[{ value: "now", label: "עכשיו" }, { value: "night", label: "הלילה", disabled: true }, { value: "quota", label: "כשהמכסה מתחדשת", disabled: true }]} />
+        </div>
+
+        <div className="card" style={{ gap: 14 }}>
+          <Toggle label="משימה רגישה" sub="תרוץ על המודל החזק, צורכת יותר" checked={flagged} onChange={() => setFlagged(!flagged)} />
+          <Toggle label="הראה לי את התוכנית לפני הבנייה" sub="תאשר את התוכנית לפני שהבונה מתחיל" checked={false} soon />
+        </div>
+        {error && <span className="err" role="alert">{error}</span>}
       </div>
-      {error && <p className="error" role="alert">{error}</p>}
-      <button className="primary" disabled={busy || description.trim() === ""}>{busy ? "יוצר…" : "התחל משימה"}</button>
-    </form>
+      <div className="bar-fixed">
+        <button type="button" className="btn pri big" disabled={busy || !connected} onClick={submit}>{busy ? "שולח…" : "שלח לסוכנים"}</button>
+      </div>
+    </>
   );
 }

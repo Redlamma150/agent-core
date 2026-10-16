@@ -1,132 +1,228 @@
-import { useState, type FormEvent } from "react";
-import { useApi, useTick } from "../hooks";
+import { useState } from "react";
+import { useApi, useConnected, useTick } from "../hooks";
 import { api } from "../lib/api";
-import { activityLabel, formatDate, formatNumber, RUNNING, relativeTime, STAGES, stageOf, stepLabel, taskTitle, type TaskRow } from "../lib/format";
-import { errorText, State, StatusChip } from "./common";
-import { TaskAttachments } from "./media";
+import { activityLabel, formatDate, formatNumber, parseDbDate, RUNNING, relativeTime, STAGES, stageOf, stepLabel, taskTitle, type TaskRow } from "../lib/format";
+import { InnerBar, Soon, StatusPill, Stepper } from "../ui";
+import { useUndo } from "../undo";
+import { errorText, State } from "./common";
+import { TaskGallery } from "./media";
 
 interface ActivityRow { id: number; agent: string; tool: string; target: string | null; created_at: string }
 interface StepRow { id: number; agent: string; status: string; from_status: string | null; to_status: string | null; summary: string | null; created_at: string }
 interface ApprovalRow { id: number; task_id: number; request_text: string; reminders_sent: number; created_at: string }
 
+type Act = (path: string, method?: string, body?: unknown) => Promise<void>;
+const TABS = [["overview", "סקירה"], ["preview", "תצוגה"], ["gallery", "גלריה"], ["history", "היסטוריה"]] as const;
+type TabKey = (typeof TABS)[number][0];
+
 export function TaskScreen({ id }: { id: number }) {
   const task = useApi<TaskRow>(`/tasks/${id}`);
   return (
     <>
-      <a className="back" href="#/tasks">‹ חזרה למשימות</a>
-      <State q={task}>{(t) => <TaskView t={t} reload={task.reload} />}</State>
+      <InnerBar fallback="/tasks"><span className="muted mono">#{id}</span></InnerBar>
+      <State q={task} skeletons={3}>{(t) => <TaskView base={t} reload={task.reload} />}</State>
     </>
   );
 }
 
-function TaskView({ t, reload }: { t: TaskRow; reload: () => void }) {
+const hhmm = (value: string) => parseDbDate(value).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false });
+
+function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
+  const { applyTask, schedule, notify } = useUndo();
+  const t = applyTask(base);
   const steps = useApi<StepRow[]>(`/tasks/${t.id}/steps`);
   const feed = useApi<ActivityRow[]>(`/tasks/${t.id}/activity`);
   const approvals = useApi<ApprovalRow[]>("/approvals");
   const now = useTick();
-  const [error, setError] = useState<string | null>(null);
+  const connected = useConnected();
+  const [tab, setTab] = useState<TabKey>("overview");
   const [editing, setEditing] = useState(false);
 
   /** Runs one action on the task and refreshes; the core answers 409 when the state no longer fits. */
-  async function act(path: string, method = "POST", body: unknown = {}) {
-    setError(null);
+  const act: Act = async (path, method = "POST", body = {}) => {
     try {
       const res = await api<{ id: number }>(`/tasks/${t.id}${path}`, { method, body });
       if (path === "/duplicate") window.location.hash = `#/tasks/${res.id}`;
       reload();
       steps.reload();
     } catch (err) {
-      setError(errorText(err));
+      notify(errorText(err));
     }
-  }
+  };
+  const stop = () => schedule({ text: `משימה #${t.id} נעצרה`, task: { id: t.id, patch: { status: "stopped" } }, commit: () => api(`/tasks/${t.id}/stop`, { method: "POST", body: {} }) });
+  const trash = () => {
+    schedule({ text: `משימה #${t.id} הועברה לפח`, task: { id: t.id, patch: { deleted_at: new Date().toISOString() } }, commit: () => api(`/tasks/${t.id}`, { method: "DELETE", body: {} }) });
+    window.location.hash = "#/tasks";
+  };
 
   const approval = approvals.data?.find((a) => a.task_id === t.id);
-  const reached = (steps.data ?? []).map((s) => s.to_status);
-  const stage = stageOf(t.status, reached);
+  const stage = stageOf(t.status, (steps.data ?? []).map((s) => s.to_status));
   const running = RUNNING.has(t.status) || t.status === "received";
   const trashed = t.deleted_at !== null;
+  const canEdit = ["blocked", "stopped"].includes(t.status);
 
   return (
-    <>
-      <div className="stack">
-        <div className="row between wrap">
-          <span className="pill">{t.project_name}</span>
-          <StatusChip status={t.status} />
-        </div>
-        <h2>{taskTitle(t)}</h2>
-        <ol className="stages" aria-label="שלבי המשימה">
-          {STAGES.map((label, i) => {
-            const state = i < stage ? "done" : i === stage ? `here ${t.status === "blocked" || t.status === "stopped" ? "bad" : t.status === "awaiting_approval" ? "need" : ""}` : "";
-            return <li key={label} className={state} aria-current={i === stage ? "step" : undefined}>{label}</li>;
-          })}
-        </ol>
+    <div className="body">
+      <div className="group">
+        <StatusPill status={t.status} />
+        <h1 className="h1s">{taskTitle(t)}</h1>
+        <div className="muted"><bdi>{t.project_name}</bdi> · {formatNumber(t.tokens_used)} טוקנים</div>
       </div>
+      <Stepper labels={STAGES} current={stage} status={t.status} />
 
       {trashed && (
-        <div className="callout info">
-          <strong>המשימה בפח</strong>
-          <span className="small">היא תימחק לצמיתות 30 יום אחרי המחיקה.</span>
-          <button onClick={() => act("/restore")}>שחזר</button>
+        <div className="soft">
+          <span>המשימה בפח. היא תימחק לצמיתות 30 יום אחרי המחיקה.</span>
+          <button type="button" className="btn sm" disabled={!connected} onClick={() => act("/restore")}>שחזר</button>
         </div>
       )}
 
-      {!trashed && t.status === "blocked" && <BlockedPanel t={t} act={act} />}
-      {!trashed && t.status === "awaiting_approval" && approval && <ApprovalPanel a={approval} onDone={() => { reload(); approvals.reload(); steps.reload(); }} />}
-      {!trashed && t.status === "stopped" && (
-        <div className="callout info">
-          <strong>המשימה נעצרה</strong>
-          {t.reason && <span className="small">{t.reason}</span>}
-          <ContinueForm onContinue={(note) => act("/continue", "POST", { note })} />
+      {!trashed && t.status === "merged" && (
+        <div className="card good">
+          <div className="ttl" style={{ color: "var(--success-ink)" }}>השינוי מוזג לפרויקט</div>
+          <p className="txt">אם משהו לא נראה טוב, אפשר להחזיר. נוצר שינוי הפוך, ושום דבר לא נמחק.</p>
+          <div className="row"><button type="button" className="btn" disabled>החזר את המיזוג</button><Soon>עוד לא זמין</Soon></div>
         </div>
       )}
 
-      {running && !trashed && <LiveFeed rows={feed.data ?? []} task={t} now={now} onStop={() => act("/stop")} />}
-
-      {error && <p className="error" role="alert">{error}</p>}
-
-      {editing ? (
-        <EditForm t={t} onCancel={() => setEditing(false)} onSave={async (title, description) => { await act("", "PATCH", { title, description }); setEditing(false); }} />
-      ) : (
-        <div className="card">
-          <div className="row between"><h3>מה ביקשתי</h3></div>
-          <p className="pre">{t.description}</p>
+      {!trashed && t.status === "awaiting_approval" && approval && (
+        <div className="card strong">
+          <div className="ttl">מחכה להחלטה שלך</div>
+          <p className="txt pre clamp2">{approval.request_text}</p>
+          <a className="btn pri" href={`#/approvals/${approval.id}`}>לבקשת האישור</a>
         </div>
       )}
 
-      {!trashed && !editing && <Actions t={t} act={act} onEdit={() => setEditing(true)} />}
-
-      <TaskAttachments taskId={t.id} editable={!trashed && t.status !== "merged"} />
-      <LocationCard taskId={t.id} status={t.status} />
-
-      {!running && feed.data && feed.data.length > 0 && (
-        <details className="card">
-          <summary>מה הסוכן עשה ({feed.data.length} פעולות)</summary>
-          <FeedList rows={feed.data} />
-        </details>
+      {!trashed && (t.status === "blocked" || t.status === "stopped") && (
+        <HaltedPanel t={t} act={act} onEdit={() => { setTab("overview"); setEditing(true); }} onTrash={trash} />
       )}
 
-      <details className="card" open={t.status === "blocked" || t.status === "stopped"}>
-        <summary>היסטוריה</summary>
-        {(steps.data ?? []).length === 0 && <p className="muted small">עדיין אין היסטוריה למשימה הזאת.</p>}
-        <ol className="timeline">
-          {(steps.data ?? []).map((s) => (
-            <li key={s.id} className={s.to_status === "blocked" || s.status === "agent_error" || s.status === "tests_failed" ? "bad" : s.to_status === "merged" || s.status === "tests_passed" ? "good" : s.to_status === "awaiting_approval" ? "need" : ""}>
-              <strong>{stepLabel(s)}</strong>
-              {s.summary && s.summary !== "task created" && <span className="muted small pre">{s.summary}</span>}
-              <span className="muted small">{formatDate(s.created_at)}</span>
-            </li>
-          ))}
-        </ol>
-      </details>
+      <div className="tabs" role="tablist" aria-label="חלקי המשימה">
+        {TABS.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>{label}</button>)}
+      </div>
 
+      {tab === "overview" && (
+        <>
+          {running && !trashed && <LiveLog rows={feed.data ?? []} queued={t.status === "received"} />}
+          <div className="card">
+            <div className="row between">
+              <h2 className="h2">מה ביקשתי</h2>
+              {canEdit && !editing && !trashed && <button type="button" className="btn ghost sm" onClick={() => setEditing(true)}>ערוך</button>}
+            </div>
+            {editing
+              ? <EditForm t={t} onCancel={() => setEditing(false)} onSave={async (title, description) => { await act("", "PATCH", { title, description }); setEditing(false); }} />
+              : <p className="txt pre">{t.description}</p>}
+          </div>
+          {!trashed && <Actions t={t} act={act} connected={connected} onStop={stop} onTrash={trash} />}
+          {!running && feed.data && feed.data.length > 0 && (
+            <div className="card">
+              <h2 className="h2">מה הסוכן עשה ({feed.data.length} פעולות)</h2>
+              <FeedList rows={[...feed.data].reverse()} />
+            </div>
+          )}
+          <LocationCard taskId={t.id} status={t.status} />
+          <div className="card">
+            <dl>
+              <dt>ענף</dt><dd><bdi className="mono">{t.branch ?? "—"}</bdi></dd>
+              <dt>טוקנים</dt><dd>{formatNumber(t.tokens_used)}</dd>
+              <dt>נוצרה</dt><dd><bdi>{formatDate(t.created_at)}</bdi></dd>
+              <dt>עודכנה</dt><dd>{relativeTime(t.updated_at, now)}</dd>
+              <dt>מספר</dt><dd><span className="mono">#{t.id}</span></dd>
+            </dl>
+          </div>
+        </>
+      )}
+
+      {tab === "preview" && (
+        <div className="card center soon">
+          <div className="ttl">עוד אין צילומים</div>
+          <div className="muted">צילומי לפני ואחרי יופיעו כאן כשהמערכת תתחיל לצלם את התוצר אחרי כל בנייה. מה שכבר נוצר נמצא בגלריה. <span className="soon-tag">בקרוב</span></div>
+        </div>
+      )}
+
+      {tab === "gallery" && <TaskGallery taskId={t.id} editable={!trashed && t.status !== "merged"} />}
+
+      {tab === "history" && (
+        <div className="card" style={{ gap: 14 }}>
+          {(steps.data ?? []).length === 0 && <div className="muted">עדיין אין היסטוריה למשימה הזאת.</div>}
+          {(steps.data ?? []).map((s) => {
+            const tone = s.to_status === "blocked" || s.status === "agent_error" || s.status === "tests_failed" ? "bad" : s.to_status === "merged" || s.status === "tests_passed" ? "good" : s.to_status === "awaiting_approval" ? "need" : "";
+            return (
+              <div key={s.id} className="tl">
+                <span className={`dot ${tone}`} aria-hidden="true" />
+                <div className="group" style={{ gap: 2 }}>
+                  <span style={{ fontSize: 14, fontWeight: 500 }}>{stepLabel(s)}</span>
+                  {s.summary && s.summary !== "task created" && <span className="muted pre">{s.summary}</span>}
+                  <bdi className="muted">{formatDate(s.created_at)}</bdi>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What the agent is doing right now, newest first. */
+function LiveLog({ rows, queued }: { rows: ActivityRow[]; queued: boolean }) {
+  const recent = [...rows].reverse().slice(0, 6);
+  return (
+    <div className="card" style={{ gap: 2 }}>
+      <div className="row between" style={{ marginBottom: 6 }}>
+        <h2 className="h2">עכשיו</h2>
+        <span className="live">{queued ? "בתור" : "מתעדכן"}</span>
+      </div>
+      {recent.length === 0 && <div className="muted">{queued ? "ממתינה לתורה." : "מחכה לפעולה הראשונה…"}</div>}
+      {recent.map((r, i) => (
+        <div key={r.id} className={`log ${i === 0 ? "now" : ""}`}>
+          <b>{hhmm(r.created_at)}</b>
+          <span>{activityLabel(r.tool)} {r.target && <bdi className="mono">{r.target}</bdi>}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FeedList({ rows }: { rows: ActivityRow[] }) {
+  return (
+    <div style={{ maxHeight: "46vh", overflowY: "auto" }}>
+      {rows.map((r) => (
+        <div key={r.id} className="log">
+          <b>{hhmm(r.created_at)}</b>
+          <span>{activityLabel(r.tool)} {r.target && <bdi className="mono">{r.target}</bdi>} <span className="muted">· {r.agent === "planner" ? "מתכנן" : r.agent === "builder" ? "בונה" : "מערכת"}</span></span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Blocked or stopped: why, in plain words, and what can be done, with the simplest way forward first. */
+function HaltedPanel({ t, act, onEdit, onTrash }: { t: TaskRow; act: Act; onEdit: () => void; onTrash: () => void }) {
+  const [note, setNote] = useState("");
+  const connected = useConnected();
+  const blocked = t.status === "blocked";
+  return (
+    <>
       <div className="card">
-        <dl>
-          <dt>ענף</dt><dd><bdi>{t.branch ?? "—"}</bdi></dd>
-          <dt>טוקנים</dt><dd>{formatNumber(t.tokens_used)}</dd>
-          <dt>נוצרה</dt><dd>{formatDate(t.created_at)}</dd>
-          <dt>עודכנה</dt><dd>{relativeTime(t.updated_at, now)}</dd>
-          <dt>מספר</dt><dd>#{t.id}</dd>
-        </dl>
+        <h2 className="h2">{blocked ? "למה היא נתקעה" : "למה היא נעצרה"}</h2>
+        <p className="txt pre">{t.reason ?? (blocked ? "הסוכן לא הצליח להמשיך." : "המשימה נעצרה.")}</p>
+      </div>
+      <div className="group">
+        <h2 className="h2">מה לעשות</h2>
+        <div className="card strong">
+          <div className="row"><span className="ttl">המשך מאותו מקום</span><span className="ai rec">מומלץ</span></div>
+          <label className="muted" htmlFor="continue-note">הערה לסוכן (לא חובה)</label>
+          <textarea id="continue-note" className="field" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="למשל: תשתמש בשם הקובץ index.html" />
+          <button type="button" className="btn pri" disabled={!connected} onClick={() => act("/continue", "POST", { note })}>המשך</button>
+        </div>
+        <a className="card" href={`#/chat?q=${encodeURIComponent(`למה משימה #${t.id} ${blocked ? "נתקעה" : "נעצרה"} ומה כדאי לעשות?`)}`}>
+          <div className="ttl">שאל את המתפעל</div><div className="muted">תסביר לו במילים מה לעשות</div>
+        </a>
+      </div>
+      <div className="row">
+        <button type="button" className="btn grow" onClick={onEdit}>ערוך ותכנן מחדש</button>
+        <button type="button" className="btn dan grow" disabled={!connected} onClick={onTrash}>מחק</button>
       </div>
     </>
   );
@@ -135,16 +231,15 @@ function TaskView({ t, reload }: { t: TaskRow; reload: () => void }) {
 /** Where the work is on the computer, with one-tap buttons. The buttons only work from the computer itself, not the phone. */
 function LocationCard({ taskId, status }: { taskId: number; status: string }) {
   const where = useApi<{ path: string; kind: "worktree" | "project"; exists: boolean }>(`/tasks/${taskId}/location`);
-  const [msg, setMsg] = useState<string | null>(null);
+  const { notify } = useUndo();
   const [copied, setCopied] = useState(false);
   if (!where.data) return null;
   const { path, kind, exists } = where.data;
   async function open(target: "folder" | "editor") {
-    setMsg(null);
     try {
       await api(`/tasks/${taskId}/open`, { method: "POST", body: { target } });
     } catch (err) {
-      setMsg(errorText(err));
+      notify(errorText(err));
     }
   }
   async function copy() {
@@ -153,105 +248,20 @@ function LocationCard({ taskId, status }: { taskId: number; status: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      setMsg("ההעתקה לא נתמכת כאן. הנתיב מוצג למעלה.");
+      notify("ההעתקה לא נתמכת כאן. הנתיב מוצג בכרטיס.");
     }
   }
   return (
     <div className="card">
-      <h3>{kind === "worktree" ? "איפה העבודה נמצאת" : status === "merged" ? "השינוי מוזג לפרויקט" : "תיקיית הפרויקט"}</h3>
-      <p className="muted small path"><bdi>{path}</bdi></p>
+      <h2 className="h2">{kind === "worktree" ? "איפה העבודה נמצאת" : status === "merged" ? "השינוי מוזג לפרויקט" : "תיקיית הפרויקט"}</h2>
+      <p className="muted path"><bdi className="mono">{path}</bdi></p>
       {exists ? (
         <div className="actions">
-          <button className="primary" onClick={() => open("folder")}>פתח תיקייה</button>
-          <button onClick={() => open("editor")}>פתח בעורך</button>
-          <button className="quiet" onClick={copy}>{copied ? "הועתק ✓" : "העתק נתיב"}</button>
+          <button type="button" className="btn pri sm" onClick={() => open("folder")}>פתח תיקייה</button>
+          <button type="button" className="btn sm" onClick={() => open("editor")}>פתח בעורך</button>
+          <button type="button" className="btn ghost sm" onClick={copy}>{copied ? "הועתק" : "העתק נתיב"}</button>
         </div>
-      ) : <p className="muted small">התיקייה כבר לא קיימת.</p>}
-      {msg && <p className="error" role="alert">{msg}</p>}
-    </div>
-  );
-}
-
-function FeedList({ rows }: { rows: ActivityRow[] }) {
-  return (
-    <ul className="feed">
-      {[...rows].reverse().map((r) => (
-        <li key={r.id}>
-          <span>{activityLabel(r.tool)} {r.target && <bdi>{r.target}</bdi>}</span>
-          <span className="muted small">{r.agent === "planner" ? "מתכנן" : r.agent === "builder" ? "בונה" : "מערכת"}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function LiveFeed({ rows, task, now, onStop }: { rows: ActivityRow[]; task: TaskRow; now: number; onStop: () => void }) {
-  const [sure, setSure] = useState(false);
-  return (
-    <div className="card now">
-      <div className="row between">
-        <span className="muted small"><span className="live-dot pulse" />{task.status === "received" ? "בתור, ממתין לתורו" : task.status === "planning" ? "הסוכן מתכנן" : "הסוכן בונה"} · {relativeTime(task.created_at, now)}</span>
-        <span className="muted small">{formatNumber(task.tokens_used)} טוקנים</span>
-      </div>
-      {rows.length === 0 ? <p className="muted">מחכה לפעולה הראשונה…</p> : <FeedList rows={rows} />}
-      {sure ? (
-        <div className="actions">
-          <button className="danger solid" onClick={onStop}>כן, עצור עכשיו</button>
-          <button onClick={() => setSure(false)}>ביטול</button>
-        </div>
-      ) : <button className="danger" onClick={() => setSure(true)}>עצור משימה</button>}
-    </div>
-  );
-}
-
-function ContinueForm({ onContinue }: { onContinue: (note: string) => void }) {
-  const [note, setNote] = useState("");
-  return (
-    <div className="stack">
-      <label htmlFor="note">הערה לסוכן (לא חובה)</label>
-      <textarea id="note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="למשל: תשתמש בשם הקובץ index.html" />
-      <button className="primary" onClick={() => onContinue(note)}>המשך מאותו מקום</button>
-    </div>
-  );
-}
-
-function BlockedPanel({ t, act }: { t: TaskRow; act: (path: string, method?: string, body?: unknown) => Promise<void> }) {
-  return (
-    <div className="callout bad">
-      <strong>המשימה נתקעה</strong>
-      <span className="pre">{t.reason ?? "הסוכן לא הצליח להמשיך."}</span>
-      <ContinueForm onContinue={(note) => act("/continue", "POST", { note })} />
-    </div>
-  );
-}
-
-function ApprovalPanel({ a, onDone }: { a: ApprovalRow; onDone: () => void }) {
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  async function decide(decision: "approve" | "reject") {
-    setBusy(true);
-    setError(null);
-    try {
-      await api(`/approvals/${a.id}`, { method: "POST", body: { decision, note: note.trim() || undefined } });
-      onDone();
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="callout need">
-      <strong>מחכה לאישור שלך</strong>
-      <p className="pre">{a.request_text}</p>
-      <label htmlFor={`n-${a.id}`}>הערה (חובה רק אם דוחים)</label>
-      <textarea id={`n-${a.id}`} rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
-      {error && <p className="error" role="alert">{error}</p>}
-      <div className="actions">
-        <button className="primary" disabled={busy} onClick={() => decide("approve")}>אשר ומזג</button>
-        <button className="danger" disabled={busy || note.trim() === ""} onClick={() => decide("reject")}>דחה עם הערה</button>
-      </div>
+      ) : <p className="muted">התיקייה כבר לא קיימת.</p>}
     </div>
   );
 }
@@ -260,42 +270,40 @@ function EditForm({ t, onSave, onCancel }: { t: TaskRow; onSave: (title: string,
   const [title, setTitle] = useState(taskTitle(t));
   const [description, setDescription] = useState(t.description);
   const [busy, setBusy] = useState(false);
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function submit() {
     setBusy(true);
     await onSave(title.trim(), description.trim());
     setBusy(false);
   }
   return (
-    <form className="card" onSubmit={submit}>
-      <label htmlFor="t">כותרת</label>
-      <input id="t" value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} required />
-      <label htmlFor="d">מה לבצע</label>
-      <textarea id="d" rows={6} value={description} onChange={(e) => setDescription(e.target.value)} required />
-      <div className="actions">
-        <button className="primary" disabled={busy || !title.trim() || !description.trim()}>שמור</button>
-        <button type="button" onClick={onCancel}>ביטול</button>
+    <>
+      <label className="label" htmlFor="edit-title">כותרת</label>
+      <input id="edit-title" className="field" value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} />
+      <label className="label" htmlFor="edit-desc">מה לבצע</label>
+      <textarea id="edit-desc" className="field" style={{ height: 140 }} value={description} onChange={(e) => setDescription(e.target.value)} />
+      <div className="muted">השינוי נשמר מיד ויגיע לסוכן כשתמשיך את המשימה.</div>
+      <div className="row">
+        <button type="button" className="btn pri grow" disabled={busy || !title.trim() || !description.trim()} onClick={submit}>שמור</button>
+        <button type="button" className="btn grow" onClick={onCancel}>ביטול</button>
       </div>
-    </form>
+    </>
   );
 }
 
-/** The secondary actions that fit the task's state. Deleting needs a second tap. */
-function Actions({ t, act, onEdit }: { t: TaskRow; act: (path: string, method?: string, body?: unknown) => Promise<void>; onEdit: () => void }) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const canEdit = ["blocked", "stopped"].includes(t.status);
-  const canDelete = !["received", "planning", "in_progress", "awaiting_approval"].includes(t.status);
+/** The secondary actions that fit the task's state. Stop and delete have the 5 second undo window instead of a second tap. */
+function Actions({ t, act, connected, onStop, onTrash }: { t: TaskRow; act: Act; connected: boolean; onStop: () => void; onTrash: () => void }) {
+  const stoppable = ["received", "planning", "in_progress", "awaiting_approval"].includes(t.status);
   const settled = t.status === "merged" || t.status === "stopped";
-  if (!canEdit && !canDelete && !settled) return null;
+  const canDuplicate = settled || t.status === "blocked";
+  const canDelete = t.status === "merged"; // blocked and stopped tasks have delete in their own panel
   return (
-    <div className="actions">
-      {canEdit && <button onClick={onEdit}>ערוך</button>}
-      {(settled || t.status === "blocked") && <button onClick={() => act("/duplicate")}>שכפל</button>}
-      {settled && !t.archived_at && <button onClick={() => act("/archive")}>לארכיון</button>}
-      {t.archived_at && <button onClick={() => act("/unarchive")}>החזר מהארכיון</button>}
-      {canDelete && (confirmDelete ? (
-        <button className="danger solid" onClick={() => act("", "DELETE")}>כן, העבר לפח</button>
-      ) : <button className="danger" onClick={() => setConfirmDelete(true)}>מחק</button>)}
+    <div className="row wrap">
+      {stoppable && <button type="button" className="btn dan" disabled={!connected} onClick={onStop}>עצור</button>}
+      {canDuplicate && <button type="button" className="btn" disabled={!connected} onClick={() => act("/duplicate")}>שכפל</button>}
+      <a className="btn" href={`#/chat?q=${encodeURIComponent(`ספר לי על משימה #${t.id}`)}`}>שאל את המתפעל</a>
+      {settled && !t.archived_at && <button type="button" className="btn" disabled={!connected} onClick={() => act("/archive")}>לארכיון</button>}
+      {t.archived_at && <button type="button" className="btn" disabled={!connected} onClick={() => act("/unarchive")}>החזר מהארכיון</button>}
+      {canDelete && <button type="button" className="btn dan" disabled={!connected} onClick={onTrash}>מחק</button>}
     </div>
   );
 }

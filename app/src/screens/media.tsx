@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type DragEvent } from "react";
-import { useApi } from "../hooks";
+import { useEffect, useRef, useState } from "react";
+import { useApi, useConnected } from "../hooks";
 import { api, fetchBlobUrl, uploadFile } from "../lib/api";
+import { Icon, Soon } from "../ui";
+import { useUndo } from "../undo";
 import { errorText } from "./common";
 
 export const ACCEPT = "image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv";
@@ -17,75 +19,77 @@ export function fileProblem(f: { type: string; size: number; name: string }): st
   return null;
 }
 
-/** Small preview of an attached image; non-images show an icon. */
+const isHeic = (f: File) => /^image\/hei[cf]$/i.test(f.type) || /\.hei[cf]$/i.test(f.name);
+
+/** iPhone photos can be HEIC, which the core rejects. They are converted to JPEG on the phone before upload. */
+export async function prepareFile(f: File): Promise<File> {
+  if (!isHeic(f)) return f;
+  try {
+    const bitmap = await createImageBitmap(f);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d")!.drawImage(bitmap, 0, 0);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+    if (!blob) return f;
+    return new File([blob], f.name.replace(/\.hei[cf]$/i, "") + ".jpg", { type: "image/jpeg" });
+  } catch {
+    return f; // not convertible here: the type check reports it
+  }
+}
+
+/** Small preview of an attached image; other files show their kind. */
 function Thumb({ file, url }: { file: { name: string; type: string }; url?: string }) {
   return file.type.startsWith("image/") && url
     ? <img className="thumb" src={url} alt={file.name} />
     : <span className="thumb file" aria-hidden="true">{file.type === "application/pdf" ? "PDF" : "TXT"}</span>;
 }
 
-/** Choose or drop files before the task exists. The parent uploads them once the task is created. */
-export function FilePicker({ files, onChange }: { files: File[]; onChange: (f: File[]) => void }) {
-  const input = useRef<HTMLInputElement>(null);
-  const [problems, setProblems] = useState<string[]>([]);
-  const [over, setOver] = useState(false);
-  const urls = useRef(new Map<File, string>());
-
-  useEffect(() => {
-    const map = urls.current;
-    return () => map.forEach((u) => URL.revokeObjectURL(u));
-  }, []);
-  const urlOf = (f: File) => {
-    if (!f.type.startsWith("image/")) return undefined;
-    if (!urls.current.has(f)) urls.current.set(f, URL.createObjectURL(f));
-    return urls.current.get(f);
+/** Camera, image and file buttons. Recording waits for transcription in the core. */
+export function MediaButtons({ onPick, disabled }: { onPick: (files: File[]) => void; disabled?: boolean }) {
+  const camera = useRef<HTMLInputElement>(null);
+  const image = useRef<HTMLInputElement>(null);
+  const file = useRef<HTMLInputElement>(null);
+  const take = async (list: FileList | null) => {
+    if (list) onPick(await Promise.all(Array.from(list).map(prepareFile)));
   };
-
-  function add(list: FileList | null) {
-    if (!list) return;
-    const bad: string[] = [];
-    const next = [...files];
-    for (const f of Array.from(list)) {
-      const problem = fileProblem(f);
-      if (problem) bad.push(problem);
-      else if (next.length >= MAX_FILES) bad.push(`אפשר עד ${MAX_FILES} קבצים`);
-      else next.push(f);
-    }
-    setProblems(bad);
-    onChange(next);
-  }
-  const drop = (e: DragEvent) => {
-    e.preventDefault();
-    setOver(false);
-    add(e.dataTransfer.files);
-  };
-
+  const hidden = (ref: React.RefObject<HTMLInputElement | null>, accept: string, capture?: "environment") => (
+    <input ref={ref} type="file" accept={accept} capture={capture} multiple={!capture} hidden onChange={(e) => { void take(e.target.files); e.target.value = ""; }} />
+  );
   return (
-    <div className={`dropzone ${over ? "over" : ""}`} onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={drop}>
-      <input ref={input} type="file" accept={ACCEPT} multiple hidden onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
-      <button type="button" onClick={() => input.current?.click()}>📎 צרף תמונות או קבצים</button>
-      <span className="muted small">אפשר גם לגרור לכאן. הסוכן רואה את התמונות ואת ה-PDF.</span>
-      {files.length > 0 && (
-        <ul className="attachments">
-          {files.map((f, i) => (
-            <li key={`${f.name}-${i}`}>
-              <Thumb file={f} url={urlOf(f)} />
-              <span className="name"><bdi>{f.name}</bdi></span>
-              <button type="button" className="quiet" aria-label={`הסר ${f.name}`} onClick={() => onChange(files.filter((_, j) => j !== i))}>✕</button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {problems.map((p) => <p key={p} className="error" role="alert">{p}</p>)}
+    <div className="media-grid">
+      {hidden(camera, "image/*", "environment")}
+      {hidden(image, "image/*")}
+      {hidden(file, ACCEPT)}
+      <button type="button" className="btn" disabled={disabled} onClick={() => camera.current?.click()}><Icon name="camera" />מצלמה</button>
+      <button type="button" className="btn" disabled={disabled} onClick={() => image.current?.click()}><Icon name="image" />תמונה</button>
+      <button type="button" className="btn" disabled={disabled} onClick={() => file.current?.click()}><Icon name="file" />קובץ</button>
+      <button type="button" className="btn soon" disabled aria-label="הקלטה, בקרוב"><Icon name="mic" />הקלטה</button>
     </div>
   );
 }
 
-/** The files already attached to a task, with the option to add more or remove one. */
-export function TaskAttachments({ taskId, editable }: { taskId: number; editable: boolean }) {
+/** Files chosen before the task exists. The parent uploads them once the task is created. */
+export function AttachmentChips({ files, onRemove }: { files: File[]; onRemove: (i: number) => void }) {
+  if (files.length === 0) return null;
+  return (
+    <div className="row wrap">
+      {files.map((f, i) => (
+        <span key={`${f.name}-${i}`} className="att">
+          <span className="name"><bdi>{f.name}</bdi></span>
+          <button type="button" aria-label={`הסר ${f.name}`} onClick={() => onRemove(i)}><Icon name="close" size={14} width={2.6} /></button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Every file that came in with the task, as a grid. The owner can add a photo or remove a file. */
+export function TaskGallery({ taskId, editable }: { taskId: number; editable: boolean }) {
   const list = useApi<Attachment[]>(`/tasks/${taskId}/media`);
+  const { notify } = useUndo();
+  const connected = useConnected();
   const input = useRef<HTMLInputElement>(null);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [urls, setUrls] = useState<Record<number, string>>({});
 
@@ -101,44 +105,47 @@ export function TaskAttachments({ taskId, editable }: { taskId: number; editable
   }, [list.data, taskId]);
   useEffect(() => () => Object.values(urls).forEach((u) => URL.revokeObjectURL(u)), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function add(files: FileList | null) {
-    if (!files) return;
+  async function add(picked: File[]) {
     setBusy(true);
-    setError(null);
-    for (const f of Array.from(files)) {
+    for (const f of picked) {
       const problem = fileProblem(f);
-      if (problem) { setError(problem); continue; }
-      try { await uploadFile(taskId, f); } catch (err) { setError(errorText(err)); }
+      if (problem) { notify(problem); continue; }
+      try { await uploadFile(taskId, f); } catch (err) { notify(errorText(err)); }
     }
     setBusy(false);
     list.reload();
   }
   async function remove(id: number) {
-    try { await api(`/tasks/${taskId}/media/${id}`, { method: "DELETE" }); list.reload(); } catch (err) { setError(errorText(err)); }
+    try { await api(`/tasks/${taskId}/media/${id}`, { method: "DELETE" }); list.reload(); } catch (err) { notify(errorText(err)); }
   }
 
   const items = list.data ?? [];
-  if (items.length === 0 && !editable) return null;
   return (
-    <div className="card">
-      <div className="row between"><h3>קבצים מצורפים</h3>{editable && (
-        <>
-          <input ref={input} type="file" accept={ACCEPT} multiple hidden onChange={(e) => { void add(e.target.files); e.target.value = ""; }} />
-          <button type="button" disabled={busy} onClick={() => input.current?.click()}>{busy ? "מעלה…" : "📎 הוסף"}</button>
-        </>
-      )}</div>
-      {items.length === 0 && <p className="muted small">עדיין לא צורפו קבצים.</p>}
-      <ul className="attachments">
+    <>
+      <span className="muted">נכנס למשימה ויצא ממנה</span>
+      {items.length === 0 && <div className="card center"><div className="muted">עדיין לא צורפו קבצים</div></div>}
+      <div className="gal">
         {items.map((a) => (
-          <li key={a.id}>
-            <Thumb file={{ name: a.name, type: a.mime }} url={urls[a.id]} />
-            <span className="name"><bdi>{a.name}</bdi></span>
-            {editable && <button type="button" className="quiet" aria-label={`הסר ${a.name}`} onClick={() => remove(a.id)}>✕</button>}
-          </li>
+          <div key={a.id} className="group" style={{ gap: 4 }}>
+            <div className="th" role="img" aria-label={a.name} style={urls[a.id] ? { backgroundImage: `url(${urls[a.id]})` } : undefined}>
+              {!urls[a.id] && <span className="muted" aria-hidden="true">{a.mime === "application/pdf" ? "PDF" : "TXT"}</span>}
+              <span className="cap"><bdi>{a.name}</bdi></span>
+            </div>
+            {editable && <button type="button" className="btn ghost sm" aria-label={`הסר ${a.name}`} onClick={() => remove(a.id)}>הסר</button>}
+          </div>
         ))}
-      </ul>
-      {editable && items.length > 0 && <p className="muted small">קבצים חדשים יגיעו לסוכן בהרצה הבאה שלו (למשל כשממשיכים משימה עצורה).</p>}
-      {error && <p className="error" role="alert">{error}</p>}
-    </div>
+      </div>
+      {editable && (
+        <>
+          <input ref={input} type="file" accept="image/*,application/pdf,text/plain,text/markdown,text/csv" multiple hidden onChange={async (e) => { const picked = await Promise.all(Array.from(e.target.files ?? []).map(prepareFile)); e.target.value = ""; void add(picked); }} />
+          <div className="row">
+            <button type="button" className="btn grow" disabled={busy || !connected} onClick={() => input.current?.click()}>{busy ? "מעלה…" : "הוסף תמונה"}</button>
+            <button type="button" className="btn grow soon" disabled>הקלט הערה</button>
+          </div>
+          <div className="row"><Soon>הקלטות</Soon></div>
+          {items.length > 0 && <div className="muted">קבצים חדשים יגיעו לסוכן בהרצה הבאה שלו, למשל כשממשיכים משימה עצורה.</div>}
+        </>
+      )}
+    </>
   );
 }

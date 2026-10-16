@@ -4,6 +4,10 @@ import { api, ApiError } from "./lib/api";
 /** Bumped on every live event from /events; screens refetch when it changes. */
 export const LiveContext = createContext(0);
 
+/** False while the live stream to the core is down; action buttons disable themselves then. */
+export const ConnectedContext = createContext(true);
+export const useConnected = () => useContext(ConnectedContext);
+
 export function useRoute(): string {
   const read = () => window.location.hash.replace(/^#/, "") || "/tasks";
   const [route, setRoute] = useState(read);
