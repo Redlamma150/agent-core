@@ -103,3 +103,33 @@ describe("push routes", () => {
     }
   });
 });
+
+describe("stuck and capped tasks", () => {
+  it("notifies once when a task gets blocked, and when it hits the cap", async () => {
+    const { TaskService } = await import("../src/core/tasks.js");
+    const { BudgetService } = await import("../src/core/budget.js");
+    const { EventBus } = await import("../src/api/events.js");
+    const { openDb } = await import("../src/db/index.js");
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p','/r')").run();
+    const bus = new EventBus();
+    const events: { type: string; data: unknown }[] = [];
+    bus.subscribe((e) => events.push(e));
+    const tasks = new TaskService(db, bus);
+    const t = tasks.create(1, "x");
+    tasks.transition(t.id, "blocked", "stuck");
+    tasks.update(t.id, { title: "renamed" }); // later edits must not notify again
+    expect(events.filter((e) => e.type === "blocked")).toHaveLength(1);
+    const msg = notificationFor(events.find((e) => e.type === "blocked")!);
+    expect(msg).toMatchObject({ title: "משימה נתקעה", url: `/#/tasks/${t.id}` });
+    expect(msg?.body).not.toContain("x"); // no task content in a notification
+
+    const t2 = tasks.create(1, "y");
+    tasks.addTokens(t2.id, 500);
+    new BudgetService(tasks, 100, bus).enforce(t2.id);
+    new BudgetService(tasks, 100, bus).enforce(t2.id); // already stopped: no second alert
+    const caps = events.filter((e) => e.type === "budget" && (e.data as { percent: number }).percent === 100);
+    expect(caps).toHaveLength(1);
+    expect(notificationFor(caps[0]!)?.title).toBe("המשימה נעצרה בתקרה");
+  });
+});

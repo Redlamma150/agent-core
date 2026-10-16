@@ -28,7 +28,10 @@ export class BudgetService {
     const task = this.tasks.get(taskId);
     const cap = this.cap + task.token_extra;
     if (task.tokens_used >= cap) {
-      if (task.status !== "stopped" && task.status !== "merged") this.tasks.transition(taskId, "stopped", `token cap reached (${task.tokens_used}/${cap})`);
+      if (task.status !== "stopped" && task.status !== "merged") {
+        this.tasks.transition(taskId, "stopped", `token cap reached (${task.tokens_used}/${cap})`);
+        this.bus?.publish({ type: "budget", data: { task_id: taskId, percent: 100 } });
+      }
       return "stop";
     }
     if (task.tokens_used >= cap * WARN_RATIO) {

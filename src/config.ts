@@ -32,6 +32,8 @@ const schema = z.object({
   REMINDER_COUNT: positiveInt("REMINDER_COUNT").default(2),
   DB_PATH: required("DB_PATH").default("./data/core.db"),
   STATIC_DIR: required("STATIC_DIR").default("./app/dist"),
+  /** Keep the Mac from going to sleep while the core runs (macOS only), so the phone can always reach it. */
+  KEEP_AWAKE: z.enum(["true", "false"], { error: "Env var KEEP_AWAKE must be true or false" }).default("true"),
 });
 
 export type Config = z.infer<typeof schema>;

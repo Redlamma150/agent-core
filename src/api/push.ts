@@ -71,6 +71,12 @@ export function notificationFor(event: CoreEvent): PushPayload | null {
   if (event.type === "reminder") {
     return { title: "תזכורת לאישור", body: `משימה #${d.task_id} עדיין ממתינה לאישור (תזכורת ${d.number})`, url: "/#/approvals" };
   }
+  if (event.type === "blocked") {
+    return { title: "משימה נתקעה", body: `משימה #${d.task_id} נתקעה וצריכה אותך`, url: `/#/tasks/${d.task_id}` };
+  }
+  if (event.type === "budget" && d.percent === 100) {
+    return { title: "המשימה נעצרה בתקרה", body: `משימה #${d.task_id} הגיעה לתקרת הטוקנים ונעצרה`, url: `/#/tasks/${d.task_id}` };
+  }
   if (event.type === "budget") {
     return { title: "תקרת טוקנים", body: `משימה #${d.task_id} הגיעה ל-${d.percent}% מתקרת הטוקנים`, url: `/#/tasks/${d.task_id}` };
   }
