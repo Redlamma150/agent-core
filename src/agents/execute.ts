@@ -8,7 +8,9 @@ import type { AgentRunner, RunRequest } from "./runner.js";
 export type Outcome =
   | { kind: "completed"; handoff: Handoff }
   | { kind: "blocked"; reasons: string[]; handoff?: Handoff }
-  | { kind: "stopped"; reason: string };
+  | { kind: "stopped"; reason: string }
+  /** The subscription quota is used up. The task waits until then; nothing counts as a failure. */
+  | { kind: "paused"; until: Date };
 
 /** Safety net: every loop iteration either returns, adds a failure or uses an escalation, so this is never reached in practice. */
 const MAX_ATTEMPTS = 12;
@@ -54,6 +56,7 @@ export async function executeAgent(
     if (after === "stopped") return { kind: "stopped", reason: "stopped by owner" };
     if (after === "blocked") return { kind: "blocked", reasons: ["blocked while running (time limit)"] };
 
+    if (!res.ok && res.quotaUntil) return { kind: "paused", until: res.quotaUntil };
     if (!res.ok || res.handoff.status === "failed") {
       tasks.note(id, "agent_error", res.ok ? `${req.role} reported failure: ${res.handoff.summary}` : `${req.role}: ${res.reason}`);
       tasks.recordFailure(id);

@@ -53,6 +53,8 @@ export interface Task {
   reverted_at: string | null;
   /** UTC time ("YYYY-MM-DD HH:MM:SS") a scheduled task is waiting for. Null once it starts. */
   scheduled_for: string | null;
+  /** "quota" while the task waits for the subscription quota to come back; null otherwise. */
+  pause_reason: string | null;
   token_extra: number;
   created_at: string;
   updated_at: string;
@@ -61,7 +63,7 @@ export interface Task {
 /** SQLite's own UTC text format, which the rest of the schema uses. */
 export const sqliteTime = (d: Date): string => d.toISOString().slice(0, 19).replace("T", " ");
 
-const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, reverted_at, scheduled_for, token_extra, created_at, updated_at";
+const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, reverted_at, scheduled_for, pause_reason, token_extra, created_at, updated_at";
 
 export class TaskService {
   constructor(private db: Db, private bus?: EventBus) {}
@@ -95,7 +97,8 @@ export class TaskService {
     const apply = this.db.transaction(() => {
       const from = this.get(id).status;
       if (!TRANSITIONS[from].includes(to)) throw new InvalidTransitionError(from, to);
-      const res = this.db.prepare("UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ? AND status = ?").run(to, id, from);
+      // Any move ends a wait: the schedule and pause marks only describe a task that stays where it is.
+      const res = this.db.prepare("UPDATE tasks SET status = ?, scheduled_for = NULL, pause_reason = NULL, updated_at = datetime('now') WHERE id = ? AND status = ?").run(to, id, from);
       if (res.changes !== 1) throw new InvalidTransitionError(from, to);
       this.db
         .prepare("INSERT INTO steps (task_id, agent, status, from_status, to_status, summary) VALUES (?, 'system', 'done', ?, ?, ?)")
@@ -126,7 +129,20 @@ export class TaskService {
 
   /** The owner starts a scheduled task now (or its time came): it no longer waits. */
   clearSchedule(id: number): void {
-    this.db.prepare("UPDATE tasks SET scheduled_for = NULL WHERE id = ?").run(id);
+    this.db.prepare("UPDATE tasks SET scheduled_for = NULL, pause_reason = NULL WHERE id = ?").run(id);
+    this.changed(id);
+  }
+
+  /** A task created to start when the quota comes back is marked like one the quota paused, so the app says so. */
+  markQuotaWait(id: number): void {
+    this.db.prepare("UPDATE tasks SET pause_reason = 'quota' WHERE id = ?").run(id);
+    this.changed(id);
+  }
+
+  /** The subscription ran out: the task stays in its stage and is started again by the scheduler at `until`. */
+  pauseUntil(id: number, until: Date, summary: string): void {
+    this.db.prepare("UPDATE tasks SET scheduled_for = ?, pause_reason = 'quota' WHERE id = ?").run(sqliteTime(until), id);
+    this.note(id, "quota_paused", summary);
     this.changed(id);
   }
 

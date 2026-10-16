@@ -10,6 +10,7 @@ import type { MediaService } from "./media.js";
 import type { Approval, ApprovalService } from "./approvals.js";
 import type { BudgetService } from "./budget.js";
 import { MergeError, SecretFileError, type FileChange, type GitService } from "./git.js";
+import { RESUME_MARGIN_MS, type QuotaService } from "./quota.js";
 import type { ScreenshotService } from "./screenshots.js";
 import type { SettingsService } from "./settings.js";
 import { runTests } from "./verify.js";
@@ -54,7 +55,7 @@ export class Pipeline implements TaskDriver {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
-    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService; media?: MediaService; screenshots?: ScreenshotService; settings?: SettingsService; timeoutMs?: number },
+    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService; media?: MediaService; screenshots?: ScreenshotService; settings?: SettingsService; quota?: QuotaService; timeoutMs?: number },
     private log: (line: string) => void = console.log,
   ) {}
 
@@ -63,6 +64,9 @@ export class Pipeline implements TaskDriver {
     this.waiting.add(taskId);
     this.queue = this.queue.then(async () => {
       this.waiting.delete(taskId);
+      // The subscription refused work a moment ago: do not spend calls on it, wait with the others.
+      const until = this.d.quota?.blockedUntil();
+      if (until && ["received", "planning", "in_progress"].includes(this.d.tasks.get(taskId).status)) return void this.pauseForQuota(taskId, until);
       const abort = new AbortController();
       this.active.set(taskId, abort);
       let timer: NodeJS.Timeout | undefined;
@@ -128,6 +132,7 @@ export class Pipeline implements TaskDriver {
     if (budget.isExhausted(taskId)) budget.grantAllowance(taskId);
     tasks.resetFailures(taskId);
     db.prepare("UPDATE tasks SET escalations = 0 WHERE id = ?").run(taskId);
+    this.d.quota?.clearBlock(); // the owner decided to try now; the runtime will say if the quota is really still gone
     const cleanNote = note?.trim() || undefined;
     if (cleanNote) tasks.note(taskId, "owner_note", cleanNote);
     const hasPlan = this.savedPlan(taskId) !== null;
@@ -235,6 +240,7 @@ export class Pipeline implements TaskDriver {
       maxTurns: 20,
       signal,
     });
+    if (out.kind === "paused") this.pauseForQuota(task.id, out.until);
     if (out.kind !== "completed") return null;
     this.d.db
       .prepare("INSERT INTO steps (task_id, agent, status, summary, handoff) VALUES (?, 'planner', 'done', ?, ?)")
@@ -270,6 +276,7 @@ export class Pipeline implements TaskDriver {
       maxTurns: 40,
       signal,
     });
+    if (out.kind === "paused") this.pauseForQuota(task.id, out.until);
     if (out.kind !== "completed") return;
 
     try {
@@ -299,6 +306,21 @@ export class Pipeline implements TaskDriver {
     const result = await runTests(command, cwd);
     this.d.tasks.note(taskId, result.passed ? "tests_passed" : "tests_failed", result.summary);
     return result.summary;
+  }
+
+  /**
+   * The subscription quota is used up. By default the task waits where it is and the scheduler starts it again when the
+   * quota is back; with auto resume off it is blocked instead, and the owner continues it.
+   */
+  private pauseForQuota(taskId: number, until: Date): void {
+    const at = new Date(until.getTime() + RESUME_MARGIN_MS);
+    const time = until.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false });
+    this.log(`task ${taskId}: subscription quota used up, waiting until ${until.toISOString()}`);
+    if (this.d.quota?.autoResume() === false) {
+      this.d.tasks.transition(taskId, "blocked", `quota used up until ${until.toISOString()}`, `מכסת המנוי נגמרה, מתחדשת ב-${time}`);
+      return;
+    }
+    this.d.tasks.pauseUntil(taskId, at, `מכסת המנוי נגמרה. המשימה מושהית ותמשיך לבד אחרי ${time}`);
   }
 
   /**

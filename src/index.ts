@@ -8,6 +8,7 @@ import { ActivityService } from "./core/activity.js";
 import { systemLocalActions } from "./core/local.js";
 import { InsightService } from "./core/insights.js";
 import { MediaService } from "./core/media.js";
+import { QuotaService } from "./core/quota.js";
 import { Scheduler } from "./core/scheduler.js";
 import { TranscribeService } from "./core/transcribe.js";
 import { SettingsService } from "./core/settings.js";
@@ -40,10 +41,11 @@ attachPush(bus, push);
 
 const settings = new SettingsService(db);
 const insights = new InsightService(db, settings);
+const quota = new QuotaService(db, settings);
 const media = new MediaService(db, join(dirname(config.DB_PATH), "uploads"));
 const budget = new BudgetService(tasks, config.TASK_TOKEN_CAP, bus);
-const runner = new AgentRunner(db, tasks, undefined, activity, protectedPathsFor(config.DB_PATH));
-const pipeline = new Pipeline({ db, tasks, approvals, runner, budget, git: new GitService(join(dirname(config.DB_PATH), "worktrees")), activity, media, settings, screenshots: config.SCREENSHOTS === "true" ? new ScreenshotService(media, playwrightLauncher(config.BROWSER_PATH)) : undefined, timeoutMs: config.TASK_TIMEOUT_MINUTES * 60_000 });
+const runner = new AgentRunner(db, tasks, undefined, activity, protectedPathsFor(config.DB_PATH), quota);
+const pipeline = new Pipeline({ db, tasks, approvals, runner, budget, git: new GitService(join(dirname(config.DB_PATH), "worktrees")), activity, media, settings, quota, screenshots: config.SCREENSHOTS === "true" ? new ScreenshotService(media, playwrightLauncher(config.BROWSER_PATH)) : undefined, timeoutMs: config.TASK_TIMEOUT_MINUTES * 60_000 });
 const operator = new OperatorService({ db, tasks, driver: pipeline, runner }, join(dirname(config.DB_PATH), "operator"));
 const transcribe = config.TRANSCRIBE === "true" ? new TranscribeService({ command: config.WHISPER_COMMAND, model: config.WHISPER_MODEL, language: config.WHISPER_LANGUAGE }) : undefined;
 void transcribe?.available().then((ok) => console.log(ok ? `voice transcription ready (whisper ${config.WHISPER_MODEL}, runs on this computer)` : "voice transcription is off: the whisper command was not found (TRANSCRIBE=false hides this)"));
@@ -51,7 +53,7 @@ const scheduler = new Scheduler(db, tasks, pipeline);
 const resumed = pipeline.resume();
 if (resumed > 0) console.log(`resuming ${resumed} unfinished task(s)`);
 
-const servers = await startServers({ db, accessToken: config.APP_ACCESS_TOKEN, tasks, approvals, driver: pipeline, activity, media, insights, settings, nightHour: config.NIGHT_HOUR, transcribe, local: systemLocalActions, operator, push, vapidPublicKey: config.VAPID_PUBLIC_KEY, staticDir: config.STATIC_DIR, bus, logger: true }, config.API_BIND_HOSTS, config.API_PORT);
+const servers = await startServers({ db, accessToken: config.APP_ACCESS_TOKEN, tasks, approvals, driver: pipeline, activity, media, insights, settings, nightHour: config.NIGHT_HOUR, transcribe, quota, local: systemLocalActions, operator, push, vapidPublicKey: config.VAPID_PUBLIC_KEY, staticDir: config.STATIC_DIR, bus, logger: true }, config.API_BIND_HOSTS, config.API_PORT);
 
 // Reminders are published on the bus: SSE clients see them live and attachPush forwards them as Web Push.
 const reminderTimer = setInterval(() => {

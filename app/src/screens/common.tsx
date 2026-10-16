@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ApiError } from "../lib/api";
-import { relativeTime, scheduleLabel, taskTitle, type TaskRow } from "../lib/format";
+import { clockTime, relativeTime, scheduleLabel, taskTitle, waitsForQuota, type TaskRow } from "../lib/format";
 import type { Loaded } from "../hooks";
 import { AiBadge, Skeleton, StatusPill } from "../ui";
 
@@ -45,6 +45,7 @@ export function taskReason(t: TaskRow): string | null {
   if (t.status === "blocked") return t.reason ?? "הסוכן לא הצליח להמשיך.";
   if (t.status === "awaiting_approval") return "הסוכן סיים, צריך את האישור שלך";
   if (t.status === "stopped") return t.reason;
+  if (waitsForQuota(t)) return `המכסה של המנוי נגמרה. תמשיך לבד אחרי ${clockTime(t.scheduled_for!)}`;
   if (t.status === "received" && t.scheduled_for) return `מתוזמנת: תתחיל ${scheduleLabel(t.scheduled_for)}`;
   return null;
 }
@@ -55,7 +56,7 @@ export function TaskCard({ t, now, queue }: { t: TaskRow; now: number; queue?: n
   return (
     <a className="card" href={`#/tasks/${t.id}`}>
       <div className="row between">
-        <StatusPill status={t.status} reverted={!!t.reverted_at} />
+        <StatusPill status={t.status} reverted={!!t.reverted_at} paused={waitsForQuota(t)} />
         <span className="muted">{queue ? `מקום ${queue} בתור · ` : ""}{relativeTime(t.updated_at, now)}</span>
       </div>
       <div className="ttl clamp2">{taskTitle(t)}</div>

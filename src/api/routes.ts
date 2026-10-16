@@ -12,6 +12,7 @@ import { ALLOWED_MIME, MAX_FILE_BYTES, MediaError, type MediaService } from "../
 import { OperatorBusyError, OperatorFailedError, MAX_HISTORY, MAX_TEXT, type OperatorService } from "../core/operator.js";
 import { AUDIO_MIME, MAX_AUDIO_BYTES, looksLikeAudio, TranscribeError, type TranscribeService } from "../core/transcribe.js";
 import { UnknownInsightError, type InsightService } from "../core/insights.js";
+import { RESUME_MARGIN_MS, type QuotaService } from "../core/quota.js";
 import { nextNight } from "../core/scheduler.js";
 import { registerProject } from "../core/projects.js";
 import type { SettingsService } from "../core/settings.js";
@@ -21,7 +22,7 @@ const notImplemented = (reply: FastifyReply, milestone: string) =>
   reply.code(501).send({ error: "not_implemented", milestone });
 
 const TASK_COLUMNS =
-  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.scheduled_for, t.created_at, t.updated_at";
+  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.scheduled_for, t.pause_reason, t.created_at, t.updated_at";
 const TASK_FROM = "FROM tasks t JOIN projects p ON p.id = t.project_id";
 /** Why a blocked or stopped task stopped: the summary of the step that moved it there. */
 /** The model that did the task's work: the builder's latest call, otherwise any latest call. Always a Claude model for now. */
@@ -33,7 +34,7 @@ const VIEWS: Record<string, string> = {
   trash: "t.deleted_at IS NOT NULL",
 };
 
-const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional(), when: z.enum(["now", "night"]).optional() });
+const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional(), when: z.enum(["now", "night", "quota"]).optional() });
 const editTaskBody = z.object({ title: z.string().trim().min(1).max(80).optional(), description: z.string().trim().min(1).max(5000).optional() }).refine((b) => b.title !== undefined || b.description !== undefined, "nothing to change");
 const continueBody = z.object({ note: z.string().trim().max(5000).optional() });
 const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z.string().max(5000).optional(), stash: z.boolean().optional() });
@@ -51,9 +52,10 @@ export interface Services {
   insights?: InsightService;
   settings?: SettingsService;
   transcribe?: TranscribeService;
+  quota?: QuotaService;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings, nightHour = 2, transcribe }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings, nightHour = 2, transcribe, quota }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message, reason: err.reason });
@@ -183,18 +185,23 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   app.post("/tasks", async (req, reply) => {
     const body = createTaskBody.parse(req.body);
     if (!db.prepare("SELECT 1 FROM projects WHERE id = ?").get(body.project_id)) return reply.code(404).send({ error: "project_not_found" });
-    const night = body.when === "night";
-    const task = tasks.create(body.project_id, body.description, body.flagged, night ? nextNight(new Date(), nightHour) : null);
+    // "When the quota comes back" waits for the next reset of the 5 hour window; when none is known there is nothing to wait for.
+    const reset = body.when === "quota" ? quota?.nextReset() ?? null : null;
+    const night = body.when === "night" || reset !== null;
+    const task = tasks.create(body.project_id, body.description, body.flagged, body.when === "night" ? nextNight(new Date(), nightHour) : reset ? new Date(reset.getTime() + RESUME_MARGIN_MS) : null);
+    if (reset) tasks.markQuotaWait(task.id);
     // `hold`: the app attaches files first and then starts the task, so the agent sees them from its first step.
     // A night task is never started here: the scheduler starts it when its time comes.
     if (!body.hold && !night) driver.start(task.id);
-    return reply.code(201).send(task);
+    return reply.code(201).send(reset ? tasks.get(task.id) : task);
   });
   app.post<{ Params: { id: string } }>("/tasks/:id/start", async (req, reply) => {
     const id = taskId(req.params.id);
     if (id === null) return reply.code(400).send({ error: "invalid_id" });
     const task = tasks.get(id);
-    if (task.status !== "received") throw new InvalidActionError(`task is already ${task.status}`);
+    // A task waiting out its schedule or the quota can also be in planning or in progress; anything else is not startable.
+    if (task.status !== "received" && !(task.scheduled_for && (task.status === "planning" || task.status === "in_progress"))) throw new InvalidActionError(`task is already ${task.status}`);
+    quota?.clearBlock();
     tasks.clearSchedule(id); // starting by hand skips the wait
     driver.start(id);
     return oneTask(id);
@@ -287,7 +294,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
       return insights.list();
     });
   }
-  app.get("/settings", async () => ({ auto_stash: settings?.autoStash() ?? false, night_hour: nightHour, transcribe: (await transcribe?.available()) ?? false }));
+  app.get("/settings", async () => ({ auto_stash: settings?.autoStash() ?? false, auto_resume: quota?.autoResume() ?? true, night_hour: nightHour, transcribe: (await transcribe?.available()) ?? false }));
   // A recording in, its text out. The audio is never stored.
   app.addContentTypeParser([...AUDIO_MIME], { parseAs: "buffer", bodyLimit: MAX_AUDIO_BYTES }, (_req, body, done) => done(null, body));
   app.post("/transcribe", async (req, reply) => {
@@ -299,9 +306,10 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   });
   app.put("/settings", async (req, reply) => {
     if (!settings) return reply.code(501).send({ error: "not_implemented" });
-    const body = z.object({ auto_stash: z.boolean().optional() }).parse(req.body);
+    const body = z.object({ auto_stash: z.boolean().optional(), auto_resume: z.boolean().optional() }).parse(req.body);
     if (body.auto_stash !== undefined) settings.setAutoStash(body.auto_stash);
-    return { auto_stash: settings.autoStash() };
+    if (body.auto_resume !== undefined) quota?.setAutoResume(body.auto_resume);
+    return { auto_stash: settings.autoStash(), auto_resume: quota?.autoResume() ?? true };
   });
 
   app.get("/usage", async () => {
@@ -310,6 +318,8 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
     return {
       ...(db.prepare(`SELECT ${sum} FROM llm_calls`).get() as object),
       // Windows for the quota meter: the Claude plan limits usage in rolling windows, so recent usage is what matters.
+      // The subscription's own numbers when the runtime has reported them (null until an agent has run since the last reset).
+      quota: quota?.snapshot() ?? null,
       last_5h: since("-5 hours"),
       last_24h: since("-24 hours"),
       last_7d: since("-7 days"),

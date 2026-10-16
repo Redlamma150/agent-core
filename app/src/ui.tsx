@@ -29,7 +29,8 @@ export function Icon({ name, size = 20, color = "currentColor", width = 2 }: { n
   );
 }
 
-export function StatusPill({ status, label, reverted }: { status: string; label?: string; reverted?: boolean }) {
+export function StatusPill({ status, label, reverted, paused }: { status: string; label?: string; reverted?: boolean; paused?: boolean }) {
+  if (paused) return <span className="pill p-pause">מושהית עד חידוש המכסה</span>;
   if (reverted && status === "merged") return <span className="pill p-undone">המיזוג הוחזר</span>;
   return <span className={`pill ${pillClass(status)}`}>{label ?? statusLabel(status)}</span>;
 }
