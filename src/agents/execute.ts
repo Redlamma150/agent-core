@@ -12,6 +12,12 @@ export type Outcome =
 /** Safety net: every loop iteration either returns, adds a failure or uses an escalation, so this is never reached in practice. */
 const MAX_ATTEMPTS = 12;
 
+/** The agent's own first sentence, short enough for a notification. The planner and builder write their summaries in Hebrew. */
+export function shortReason(summary: string, max = 90): string {
+  const first = (summary.split(/\n|(?<=[.!?])\s/)[0] ?? "").trim();
+  return first.length > max ? `${first.slice(0, max - 1).trimEnd()}…` : first;
+}
+
 /**
  * Runs an agent for a task with routing, failure counting, escalation and the token cap.
  * Escalations and budget warnings are written to the task's step log.
@@ -32,7 +38,7 @@ export async function executeAgent(
 
     const decision = route({ role: req.role, consecutiveFailures: task.failures, escalations: task.escalations, flagged: task.flagged === 1, lastConfidence });
     if (decision.action === "block") {
-      tasks.transition(id, "blocked", decision.reasons.join("; "));
+      tasks.transition(id, "blocked", decision.reasons.join("; "), "הסוכן נכשל או לא היה בטוח בעצמו, גם אחרי הסלמה למודל החזק");
       return { kind: "blocked", reasons: decision.reasons };
     }
     if (decision.escalate) {
@@ -54,7 +60,7 @@ export async function executeAgent(
     }
     tasks.resetFailures(id);
     if (res.handoff.status === "blocked") {
-      tasks.transition(id, "blocked", res.handoff.summary);
+      tasks.transition(id, "blocked", res.handoff.summary, `הסוכן דיווח שהוא תקוע: ${shortReason(res.handoff.summary)}`);
       return { kind: "blocked", reasons: [res.handoff.summary], handoff: res.handoff };
     }
     if (res.handoff.confidence < MIN_CONFIDENCE) {
@@ -63,6 +69,6 @@ export async function executeAgent(
     }
     return { kind: "completed", handoff: res.handoff };
   }
-  tasks.transition(id, "blocked", `gave up after ${MAX_ATTEMPTS} attempts`);
+  tasks.transition(id, "blocked", `gave up after ${MAX_ATTEMPTS} attempts`, "הסוכן לא הצליח להתקדם אחרי כמה ניסיונות");
   return { kind: "blocked", reasons: [`gave up after ${MAX_ATTEMPTS} attempts`] };
 }

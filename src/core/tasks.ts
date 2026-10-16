@@ -80,7 +80,11 @@ export class TaskService {
    * Moves a task to a new state. The status change and its audit row in `steps` are written in one
    * transaction, guarded on the current status so two concurrent callers cannot both win.
    */
-  transition(id: number, to: TaskStatus, summary?: string): Task {
+  /**
+   * `notice` is a short Hebrew reason for the owner's push notification (blocked tasks). `summary` is the technical
+   * audit line and may be in English or contain details that must not appear on a lock screen.
+   */
+  transition(id: number, to: TaskStatus, summary?: string, notice?: string): Task {
     const apply = this.db.transaction(() => {
       const from = this.get(id).status;
       if (!TRANSITIONS[from].includes(to)) throw new InvalidTransitionError(from, to);
@@ -94,13 +98,16 @@ export class TaskService {
     const task = this.get(id);
     this.bus?.publish({ type: "task", data: { id, status: task.status } });
     // A separate event, only for the moment a task gets stuck: the owner is notified once, not on every later edit.
-    if (to === "blocked") this.bus?.publish({ type: "blocked", data: { task_id: id } });
+    if (to === "blocked") this.bus?.publish({ type: "blocked", data: { task_id: id, reason: notice ?? "" } });
+    if (to === "merged") this.bus?.publish({ type: "merged", data: { task_id: id } });
     return task;
   }
 
   /** Stops a task immediately from any non-terminal state. */
   stop(id: number): Task {
-    return this.transition(id, "stopped", "stopped by owner");
+    const task = this.transition(id, "stopped", "stopped by owner");
+    this.bus?.publish({ type: "stopped", data: { task_id: id } }); // only the owner's stop: the token cap has its own alert
+    return task;
   }
 
   /** Tasks that were mid-flight and should be picked up again after a restart. */
