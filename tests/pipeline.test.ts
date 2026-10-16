@@ -7,6 +7,8 @@ import { AgentRunner, type QueryFn } from "../src/agents/runner.js";
 import { ApprovalService } from "../src/core/approvals.js";
 import { BudgetService } from "../src/core/budget.js";
 import { MergeError } from "../src/core/git.js";
+import { MediaService } from "../src/core/media.js";
+import { ScreenshotService } from "../src/core/screenshots.js";
 import { Pipeline } from "../src/core/pipeline.js";
 import { TaskService } from "../src/core/tasks.js";
 import { openDb } from "../src/db/index.js";
@@ -23,7 +25,7 @@ const handoff = (taskId: number, agent: Role, over: Record<string, unknown> = {}
 const done = (structured: unknown): SDKMessage =>
   ({ type: "result", subtype: "success", is_error: false, result: "", structured_output: structured, modelUsage: { m: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 } } }) as unknown as SDKMessage;
 
-async function setup(behaviour: Partial<Record<Role, Behaviour>> = {}, timeoutMs?: number) {
+async function setup(behaviour: Partial<Record<Role, Behaviour>> = {}, timeoutMs?: number, screenshots?: (media: MediaService) => ScreenshotService) {
   const { repo, git } = await makeRepo();
   const db = openDb(":memory:");
   db.prepare("INSERT INTO projects (name, repo_path) VALUES ('proj', ?)").run(repo);
@@ -43,9 +45,10 @@ async function setup(behaviour: Partial<Record<Role, Behaviour>> = {}, timeoutMs
     } else yield done(handoff(taskId, "planner", { open_items: ["צור את hello.txt"] }));
   };
   const runner = new AgentRunner(db, tasks, query);
-  const pipeline = new Pipeline({ db, tasks, approvals, runner, budget: new BudgetService(tasks, 1_000_000), git, timeoutMs }, () => {});
+  const media = new MediaService(db, join(repo, "..", "uploads"));
+  const pipeline = new Pipeline({ db, tasks, approvals, runner, budget: new BudgetService(tasks, 1_000_000), git, media, screenshots: screenshots?.(media), timeoutMs }, () => {});
   const task = tasks.create(1, "add hello.txt");
-  return { repo, db, tasks, approvals, pipeline, calls, task, git, runner, budgetCap: 1_000_000 };
+  return { repo, db, tasks, approvals, pipeline, calls, task, git, runner, media, budgetCap: 1_000_000 };
 }
 
 describe("pipeline", () => {
@@ -222,5 +225,36 @@ describe("pipeline", () => {
     t.pipeline.start(t.task.id);
     await t.pipeline.idle();
     expect(t.tasks.get(t.task.id).status).toBe("blocked");
+  });
+
+  describe("screenshots", () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+    const fake = (fail = false) => (media: MediaService) => new ScreenshotService(media, async () => {
+      if (fail) throw new Error("no browser");
+      return { shoot: async () => png, close: async () => undefined };
+    });
+    const buildsPage: Behaviour = (call) => {
+      writeFileSync(join(String(call.options.cwd), "index.html"), "<h1>hi</h1>");
+      return handoff(Number(/Task (\d+)/.exec(call.prompt)?.[1]), "builder", { artifacts: ["index.html"] });
+    };
+
+    it("takes screenshots after the build and mentions them in the approval request", async () => {
+      const t = await setup({ builder: buildsPage }, undefined, fake());
+      t.pipeline.start(t.task.id);
+      await t.pipeline.idle();
+      expect(t.tasks.get(t.task.id).status).toBe("awaiting_approval");
+      expect(t.media.list(t.task.id).map((a) => a.name).sort()).toEqual(["after-desktop.png", "after-phone.png"]);
+      expect(t.approvals.pending()[0]!.request_text).toContain("צילומי");
+    });
+
+    it("still asks for approval when the browser cannot start, and records why", async () => {
+      const t = await setup({ builder: buildsPage }, undefined, fake(true));
+      t.pipeline.start(t.task.id);
+      await t.pipeline.idle();
+      expect(t.tasks.get(t.task.id).status).toBe("awaiting_approval");
+      expect(t.media.list(t.task.id)).toEqual([]);
+      const statuses = (t.db.prepare("SELECT status FROM steps WHERE task_id = ?").all(t.task.id) as { status: string }[]).map((r) => r.status);
+      expect(statuses).toContain("screenshots_failed");
+    });
   });
 });

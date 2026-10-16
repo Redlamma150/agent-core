@@ -206,3 +206,11 @@ dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes sheet-in { from { transform: translateY(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .toast, .sheet { animation: none; } }
+
+/* screenshots of the result */
+.frame-wrap { display: flex; justify-content: center; padding: 14px; background: #E9E9E4; border-radius: 14px; }
+.frame { background: #fff; box-shadow: 0 4px 14px rgba(22, 24, 29, .12); overflow: hidden; max-width: 100%; }
+.frame.phone { width: 190px; border-radius: 16px; }
+.frame.desktop { width: 100%; border-radius: 8px; }
+.frame img { display: block; width: 100%; height: auto; }
+.frame-empty { padding: 40px 12px; text-align: center; }

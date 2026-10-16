@@ -78,6 +78,7 @@ export function activityLabel(tool: string): string {
     case "Grep": return "מחפש בקוד";
     case "Bash": return "מריץ פקודה";
     case "Tests": return "מריץ את בדיקות הפרויקט";
+    case "Screenshots": return "מצלם את התוצר";
     default: return tool;
   }
 }
@@ -115,6 +116,8 @@ const NOTE_LABELS: Record<string, string> = {
   edited: "הטקסט נערך",
   tests_passed: "בדיקות הפרויקט עברו",
   tests_failed: "בדיקות הפרויקט נכשלו",
+  screenshots_taken: "צילומי לפני ואחרי מוכנים",
+  screenshots_failed: "לא הצלחתי לצלם את התוצר",
 };
 
 export function stepLabel(step: { agent: string; status: string; to_status: string | null }): string {

@@ -5,6 +5,7 @@ import { relativeTime, STAGES, taskTitle, type TaskRow } from "../lib/format";
 import { Icon, InnerBar, Sheet, Soon, StatusPill, TopBar } from "../ui";
 import { useUndo } from "../undo";
 import { coreMessage, errorText, State } from "./common";
+import { PreviewFrame, useShots } from "./Preview";
 
 export interface ApprovalRow {
   id: number;
@@ -107,6 +108,7 @@ function Detail({ a, mergeError }: { a: ApprovalRow; mergeError: string | undefi
   const connected = useConnected();
   const { notify } = useUndo();
   const [rejecting, setRejecting] = useState(false);
+  const { shots } = useShots(a.task_id);
 
   function approveAndLeave() {
     approve(a);
@@ -129,10 +131,12 @@ function Detail({ a, mergeError }: { a: ApprovalRow; mergeError: string | undefi
           <p className="txt pre">{a.request_text}</p>
         </div>
 
-        <div className="card soon" aria-disabled="true">
-          <div className="row between"><h2 className="h2">איך זה נראה</h2><span className="soon-tag">בקרוב</span></div>
-          <p className="muted">צילומי לפני ואחרי יופיעו כאן כשהמערכת תתחיל לצלם את התוצר אחרי כל בנייה.</p>
-        </div>
+        {shots.size > 0 && (
+          <div className="card">
+            <h2 className="h2">איך זה נראה</h2>
+            <PreviewFrame taskId={a.task_id} shots={shots} />
+          </div>
+        )}
 
         <div className="card">
           <h2 className="h2">איפה זה בתהליך</h2>
