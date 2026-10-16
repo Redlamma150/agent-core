@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useApi, useConnected, useTick } from "../hooks";
 import { api } from "../lib/api";
 import { activityLabel, formatDate, formatNumber, parseDbDate, RUNNING, relativeTime, STAGES, stageOf, stepLabel, taskTitle, type TaskRow } from "../lib/format";
-import { InnerBar, Sheet, StatusPill, Stepper } from "../ui";
+import { AiBadge, InnerBar, Sheet, StatusPill, Stepper } from "../ui";
 import { useUndo } from "../undo";
 import { errorText, State } from "./common";
 import { TaskGallery } from "./media";
@@ -86,7 +86,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
       <div className="group">
         <StatusPill status={t.status} reverted={!!t.reverted_at} />
         <h1 className="h1s">{taskTitle(t)}</h1>
-        <div className="muted"><bdi>{t.project_name}</bdi> · {formatNumber(t.tokens_used)} טוקנים</div>
+        <div className="row wrap"><AiBadge model={t.ai} /><span className="muted"><bdi>{t.project_name}</bdi> · {formatNumber(t.tokens_used)} טוקנים</span></div>
       </div>
       <Stepper labels={STAGES} current={stage} status={t.status} />
 

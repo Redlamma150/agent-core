@@ -190,4 +190,26 @@ describe("GitService", () => {
       await expect(git.revert(repo, merge, "develop")).rejects.toMatchObject({ reason: "branch" });
     });
   });
+
+  it("summarises what a task changed per file, without diff content", async () => {
+    const { repo, git } = await makeRepo();
+    writeFileSync(join(repo, "gone.txt"), "x\n");
+    writeFileSync(join(repo, "old-name.txt"), "line1\nline2\nline3\nline4\n");
+    await simpleGit(repo).add("-A");
+    await simpleGit(repo).raw(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "more"]);
+    const p = await git.prepare(repo, 12);
+    writeFileSync(join(p.worktree, "README.md"), "hello\nmore\n"); // modified: +1
+    writeFileSync(join(p.worktree, "new.txt"), "a\nb\nc\n"); // added: +3
+    rmSync(join(p.worktree, "gone.txt")); // deleted
+    await simpleGit(p.worktree).raw(["mv", "old-name.txt", "new-name.txt"]);
+    await git.commitAll(p.worktree, "task");
+
+    const changes = await git.changeSummary(repo, "main", "task-12");
+    const by = Object.fromEntries(changes.map((c) => [c.path, c]));
+    expect(by["README.md"]).toEqual({ path: "README.md", status: "modified", added: 1, removed: 0 });
+    expect(by["new.txt"]).toEqual({ path: "new.txt", status: "added", added: 3, removed: 0 });
+    expect(by["gone.txt"]).toMatchObject({ status: "deleted", removed: 1 });
+    expect(by["new-name.txt"]).toMatchObject({ status: "renamed" });
+    expect(JSON.stringify(changes)).not.toContain("line1");
+  });
 });

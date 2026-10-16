@@ -183,6 +183,25 @@ describe("merge failures, stash and revert", () => {
   });
 });
 
+describe("model and changes of a task", () => {
+  it("reports the builder's model on the task and serves the stored file summary", async () => {
+    const { db, app } = setup();
+    const get = (url: string) => app.inject({ method: "GET", url, headers: auth });
+    expect((await get("/tasks/1")).json().ai).toBeNull();
+    const call = db.prepare("INSERT INTO llm_calls (task_id, agent, model) VALUES (1, ?, ?)");
+    call.run("builder", "sonnet");
+    call.run("planner", "haiku"); // newer, but the builder's model is the one shown
+    expect((await get("/tasks/1")).json().ai).toBe("sonnet");
+    call.run("builder", "opus"); // escalation
+    expect((await get("/tasks")).json()[0].ai).toBe("opus");
+
+    expect((await get("/tasks/1/changes")).json()).toEqual([]);
+    db.prepare("INSERT INTO steps (task_id, agent, status, summary, handoff) VALUES (1, 'system', 'files_changed', '1 קבצים', ?)").run(JSON.stringify([{ path: "a.txt", status: "added", added: 2, removed: 0 }]));
+    expect((await get("/tasks/1/changes")).json()).toEqual([{ path: "a.txt", status: "added", added: 2, removed: 0 }]);
+    expect((await get("/tasks/99/changes")).statusCode).toBe(404);
+  });
+});
+
 describe("insights and settings", () => {
   it("lists, applies and unapplies suggestions, and keeps the stash switch", async () => {
     const db = openDb(":memory:");

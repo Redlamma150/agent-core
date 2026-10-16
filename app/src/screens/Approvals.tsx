@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useApi, useConnected, useTick } from "../hooks";
 import { api, ApiError } from "../lib/api";
-import { relativeTime, STAGES, taskTitle, type TaskRow } from "../lib/format";
-import { Icon, InnerBar, Sheet, Soon, StatusPill, TopBar } from "../ui";
+import { describeChange, relativeTime, STAGES, taskTitle, type FileChange, type TaskRow } from "../lib/format";
+import { AiBadge, Icon, InnerBar, Sheet, Soon, StatusPill, TopBar } from "../ui";
 import { useUndo, type MergeFailure } from "../undo";
 import { coreMessage, errorText, State } from "./common";
 import { PreviewFrame, useShots } from "./Preview";
@@ -112,6 +112,7 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
   const { notify } = useUndo();
   const [rejecting, setRejecting] = useState(false);
   const { shots } = useShots(a.task_id);
+  const changes = useApi<FileChange[]>(`/tasks/${a.task_id}/changes`);
 
   function approveAndLeave(stash = false) {
     approve(a, { stash });
@@ -124,7 +125,7 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
         <div className="group">
           <StatusPill status="awaiting_approval" />
           <h1 className="h1s">{task.data ? taskTitle(task.data) : `משימה #${a.task_id}`}</h1>
-          {task.data && <div className="muted"><bdi>{task.data.project_name}</bdi></div>}
+          {task.data && <div className="row wrap"><AiBadge model={task.data.ai} /><span className="muted"><bdi>{task.data.project_name}</bdi></span></div>}
         </div>
 
         {failure && <MergeFailed failure={failure} approval={a} onRetry={() => approveAndLeave()} onStash={() => approveAndLeave(true)} />}
@@ -133,6 +134,18 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
           <h2 className="h2">מה נעשה</h2>
           <p className="txt pre">{a.request_text}</p>
         </div>
+
+        {changes.data && changes.data.length > 0 && (
+          <div className="card">
+            <h2 className="h2">קבצים ששונו ({changes.data.length})</h2>
+            {changes.data.map((c) => (
+              <div key={c.path} className="row between" style={{ alignItems: "flex-start" }}>
+                <bdi className="mono" style={{ overflowWrap: "anywhere" }}>{c.path}</bdi>
+                <span className="muted" style={{ textAlign: "left", flex: "none" }}>{describeChange(c)}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {shots.size > 0 && (
           <div className="card">

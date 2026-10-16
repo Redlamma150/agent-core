@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { ApiError } from "../lib/api";
 import { relativeTime, taskTitle, type TaskRow } from "../lib/format";
 import type { Loaded } from "../hooks";
-import { Skeleton, StatusPill } from "../ui";
+import { AiBadge, Skeleton, StatusPill } from "../ui";
 
 export function State<T>({ q, children, skeletons = 2 }: { q: Loaded<T>; children: (data: T) => ReactNode; skeletons?: number }) {
   if (q.data !== null) return <>{children(q.data)}</>;
@@ -59,7 +59,7 @@ export function TaskCard({ t, now, queue }: { t: TaskRow; now: number; queue?: n
       </div>
       <div className="ttl clamp2">{taskTitle(t)}</div>
       {reason && <div className="reason clamp2">{reason}</div>}
-      <div className="row wrap"><span className="muted"><bdi>{t.project_name}</bdi> · <span className="mono">#{t.id}</span></span></div>
+      <div className="row wrap"><AiBadge model={t.ai} /><span className="muted"><bdi>{t.project_name}</bdi> · <span className="mono">#{t.id}</span></span></div>
     </a>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useConnected } from "./hooks";
-import { pillClass, statusLabel } from "./lib/format";
+import { aiLabel, pillClass, statusLabel } from "./lib/format";
 
 const ICONS = {
   back: "M9 6l6 6-6 6",
@@ -32,6 +32,12 @@ export function Icon({ name, size = 20, color = "currentColor", width = 2 }: { n
 export function StatusPill({ status, label, reverted }: { status: string; label?: string; reverted?: boolean }) {
   if (reverted && status === "merged") return <span className="pill p-undone">המיזוג הוחזר</span>;
   return <span className={`pill ${pillClass(status)}`}>{label ?? statusLabel(status)}</span>;
+}
+
+/** Which model did the work. Hidden until an agent has run. */
+export function AiBadge({ model }: { model: string | null }) {
+  const label = aiLabel(model);
+  return label ? <span className="ai">{label}</span> : null;
 }
 
 export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange?: () => void; label: string; disabled?: boolean }) {

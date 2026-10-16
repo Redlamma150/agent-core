@@ -22,6 +22,8 @@ const TASK_COLUMNS =
   "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.created_at, t.updated_at";
 const TASK_FROM = "FROM tasks t JOIN projects p ON p.id = t.project_id";
 /** Why a blocked or stopped task stopped: the summary of the step that moved it there. */
+/** The model that did the task's work: the builder's latest call, otherwise any latest call. Always a Claude model for now. */
+const AI = "(SELECT model FROM llm_calls WHERE task_id = t.id ORDER BY (agent = 'builder') DESC, id DESC LIMIT 1) AS ai";
 const REASON = "(SELECT summary FROM steps WHERE task_id = t.id AND to_status IN ('blocked','stopped') ORDER BY id DESC LIMIT 1) AS reason";
 const VIEWS: Record<string, string> = {
   active: "t.deleted_at IS NULL AND t.archived_at IS NULL",
@@ -69,12 +71,12 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   });
 
   const taskId = (raw: string): number | null => (/^\d+$/.test(raw) ? Number(raw) : null);
-  const oneTask = (id: number) => db.prepare(`SELECT ${TASK_COLUMNS}, ${REASON} ${TASK_FROM} WHERE t.id = ?`).get(id);
+  const oneTask = (id: number) => db.prepare(`SELECT ${TASK_COLUMNS}, ${REASON}, ${AI} ${TASK_FROM} WHERE t.id = ?`).get(id);
 
   app.get<{ Querystring: { view?: string } }>("/tasks", async (req, reply) => {
     const where = VIEWS[req.query.view ?? "active"];
     if (!where) return reply.code(400).send({ error: "invalid_view" });
-    return db.prepare(`SELECT ${TASK_COLUMNS}, ${REASON} ${TASK_FROM} WHERE ${where} ORDER BY t.id DESC LIMIT 200`).all();
+    return db.prepare(`SELECT ${TASK_COLUMNS}, ${REASON}, ${AI} ${TASK_FROM} WHERE ${where} ORDER BY t.id DESC LIMIT 200`).all();
   });
   app.get("/projects", async () => db.prepare("SELECT id, name, repo_path FROM projects ORDER BY name").all());
 
@@ -130,6 +132,13 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   // ---- attachments -------------------------------------------------------------------------------------------------
   // Raw bytes in the body, the file name in ?name=. One request per file.
   app.addContentTypeParser([...ALLOWED_MIME], { parseAs: "buffer", bodyLimit: MAX_FILE_BYTES }, (_req, body, done) => done(null, body));
+  app.get<{ Params: { id: string } }>("/tasks/:id/changes", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    tasks.get(id);
+    const row = db.prepare("SELECT handoff FROM steps WHERE task_id = ? AND status = 'files_changed' ORDER BY id DESC LIMIT 1").get(id) as { handoff: string } | undefined;
+    return row ? JSON.parse(row.handoff) : [];
+  });
   app.get<{ Params: { id: string } }>("/tasks/:id/media", async (req, reply) => {
     const id = taskId(req.params.id);
     if (id === null) return reply.code(400).send({ error: "invalid_id" });
