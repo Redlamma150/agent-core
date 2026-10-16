@@ -9,6 +9,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { basename } from "node:path";
 import { LocalActionError, isLocalRequest, type LocalActions } from "../core/local.js";
 import { ALLOWED_MIME, MAX_FILE_BYTES, MediaError, type MediaService } from "../core/media.js";
+import { OperatorBusyError, OperatorFailedError, MAX_HISTORY, MAX_TEXT, type OperatorService } from "../core/operator.js";
 import { registerProject } from "../core/projects.js";
 import { InvalidActionError, InvalidTransitionError, NotFoundError, type TaskService } from "../core/tasks.js";
 
@@ -38,13 +39,19 @@ export interface Services {
   activity?: ActivityService;
   media?: MediaService;
   local?: LocalActions;
+  operator?: OperatorService;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message });
     if (err instanceof InvalidActionError || err instanceof InvalidTransitionError || err instanceof AlreadyResolvedError) return reply.code(409).send({ error: "conflict", message: err.message });
+    if (err instanceof OperatorBusyError) return reply.code(429).send({ error: "busy", message: "המתפעל עונה כרגע להודעה אחרת. נסה שוב בעוד רגע." });
+    if (err instanceof OperatorFailedError) {
+      _req.log.error({ err: err.message.slice(0, 200) }, "operator failed");
+      return reply.code(502).send({ error: "operator_failed", message: "המתפעל לא הצליח לענות. נסה שוב." });
+    }
     if (err instanceof MediaError) return reply.code(400).send({ error: "media", message: err.message });
     if (err instanceof LocalActionError) return reply.code(501).send({ error: "local_unavailable", message: err.message });
     if (err instanceof Error && "statusCode" in err && err.statusCode === 413) return reply.code(413).send({ error: "media", message: "הקובץ גדול מדי (עד 15MB)." });
@@ -258,5 +265,14 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
     };
   });
 
-  app.post("/chat", async (_req, reply) => notImplemented(reply, "M5"));
+  const chatBody = z.object({
+    text: z.string().trim().min(1).max(MAX_TEXT),
+    history: z.array(z.object({ from: z.enum(["me", "system"]), text: z.string().max(MAX_TEXT) })).max(MAX_HISTORY).optional(),
+  });
+  /** Free text to the operator agent: answers questions about the system and can start, stop or continue tasks. */
+  app.post("/chat", async (req, reply) => {
+    if (!operator) return notImplemented(reply, "M11");
+    const body = chatBody.parse(req.body);
+    return operator.chat(body.text, body.history);
+  });
 }

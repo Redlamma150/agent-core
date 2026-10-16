@@ -139,3 +139,5 @@ dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; }
 .attachments button { min-height: 36px; padding: 0 10px; }
 .thumb { width: 48px; height: 48px; border-radius: 8px; object-fit: cover; flex: none; border: 1px solid var(--border); background: var(--raised); }
 .thumb.file { display: grid; place-items: center; font-size: .72rem; font-weight: 700; color: var(--muted); }
+.chat li { display: grid; gap: 6px; } .chat .end { padding: 0; border: 0; height: 1px; max-width: none; }
+.chatform { position: sticky; bottom: calc(76px + env(safe-area-inset-bottom)); background: var(--bg); padding: 6px 0; }

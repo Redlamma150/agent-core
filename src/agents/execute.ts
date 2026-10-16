@@ -18,7 +18,7 @@ const MAX_ATTEMPTS = 12;
  */
 export async function executeAgent(
   deps: { tasks: TaskService; runner: AgentRunner; budget: BudgetService },
-  req: Omit<RunRequest, "model" | "escalated">,
+  req: Omit<RunRequest, "model" | "escalated" | "taskId"> & { taskId: number },
 ): Promise<Outcome> {
   const { tasks, runner, budget } = deps;
   const id = req.taskId;
