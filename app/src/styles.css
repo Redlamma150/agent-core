@@ -214,3 +214,8 @@ dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
 .frame.desktop { width: 100%; border-radius: 8px; }
 .frame img { display: block; width: 100%; height: auto; }
 .frame-empty { padding: 40px 12px; text-align: center; }
+
+/* voice recording */
+.rec { display: inline-flex; align-items: center; gap: 6px; color: var(--danger); font-weight: 600; font-size: 13px; }
+.rec::before { content: ""; width: 8px; height: 8px; border-radius: 4px; background: var(--danger); }
+.btn.recording, .iconbtn.recording { border-color: var(--danger-line); color: var(--danger); }

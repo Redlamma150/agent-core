@@ -46,7 +46,7 @@ function Thumb({ file, url }: { file: { name: string; type: string }; url?: stri
 }
 
 /** Camera, image and file buttons. Recording waits for transcription in the core. */
-export function MediaButtons({ onPick, disabled }: { onPick: (files: File[]) => void; disabled?: boolean }) {
+export function MediaButtons({ onPick, disabled, voice }: { onPick: (files: File[]) => void; disabled?: boolean; voice: { available: boolean; state: "idle" | "recording" | "transcribing"; onToggle: () => void } }) {
   const camera = useRef<HTMLInputElement>(null);
   const image = useRef<HTMLInputElement>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -64,7 +64,14 @@ export function MediaButtons({ onPick, disabled }: { onPick: (files: File[]) => 
       <button type="button" className="btn" disabled={disabled} onClick={() => camera.current?.click()}><Icon name="camera" />מצלמה</button>
       <button type="button" className="btn" disabled={disabled} onClick={() => image.current?.click()}><Icon name="image" />תמונה</button>
       <button type="button" className="btn" disabled={disabled} onClick={() => file.current?.click()}><Icon name="file" />קובץ</button>
-      <button type="button" className="btn soon" disabled aria-label="הקלטה, בקרוב"><Icon name="mic" />הקלטה</button>
+      <button
+        type="button"
+        className={`btn ${voice.state === "recording" ? "recording" : ""} ${voice.available ? "" : "soon"}`}
+        disabled={!voice.available || voice.state === "transcribing"}
+        aria-pressed={voice.state === "recording"}
+        aria-label={voice.available ? undefined : "הקלטה: התמלול לא מותקן במחשב"}
+        onClick={voice.onToggle}
+      ><Icon name="mic" />{voice.state === "recording" ? "עצור" : voice.state === "transcribing" ? "מתמלל…" : "הקלטה"}</button>
     </div>
   );
 }

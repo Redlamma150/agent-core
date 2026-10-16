@@ -3,6 +3,8 @@ import { useApi, useConnected } from "../hooks";
 import { api, uploadFile } from "../lib/api";
 import { Icon, Segmented, Toggle } from "../ui";
 import { errorText, State } from "./common";
+import { clock, useVoice, useVoiceAvailable } from "../lib/voice";
+import { useUndo } from "../undo";
 import { AttachmentChips, fileProblem, MAX_FILES, MediaButtons } from "./media";
 
 interface Project { id: number; name: string }
@@ -54,6 +56,9 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState<{ id: number; failed: string[] } | null>(null);
   const connected = useConnected();
+  const { notify } = useUndo();
+  const voiceAvailable = useVoiceAvailable();
+  const voice = useVoice((text) => { setDescription((d) => (d.trim() ? `${d.trimEnd()}\n${text}` : text)); setNeedText(false); }, notify);
   const nightHour = useApi<{ night_hour: number }>("/settings").data?.night_hour ?? 2;
 
   useEffect(() => {
@@ -138,10 +143,11 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
 
         <div className="group">
           <span className="label">מדיה</span>
-          <MediaButtons onPick={addFiles} disabled={files.length >= MAX_FILES} />
+          <MediaButtons onPick={addFiles} disabled={files.length >= MAX_FILES} voice={{ available: voiceAvailable, state: voice.state, onToggle: voice.toggle }} />
+          {voice.state === "recording" && <span className="rec" role="status">מקליט {clock(voice.seconds)}</span>}
           <AttachmentChips files={files} onRemove={(i) => setFiles(files.filter((_, j) => j !== i))} />
           {fileErrors.map((e) => <span key={e} className="err" role="alert">{e}</span>)}
-          <span className="muted">הסוכן רואה את התמונות ואת ה-PDF. הקלטה תגיע כשיהיה תמלול.</span>
+          <span className="muted">הסוכן רואה את התמונות ואת ה-PDF. הקלטה הופכת לטקסט בשדה "מה לבצע", והתמלול רץ על המחשב שלך.</span>
         </div>
 
         <div className="group">

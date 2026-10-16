@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useConnected } from "../hooks";
 import { api } from "../lib/api";
+import { clock, useVoice, useVoiceAvailable } from "../lib/voice";
 import { Icon, TopBar } from "../ui";
+import { useUndo } from "../undo";
 import { errorText } from "./common";
 
 interface Action { type: "created" | "stopped" | "continued"; task_id: number }
@@ -32,6 +34,9 @@ export function ChatScreen({ ask }: { ask?: string }) {
   const connected = useConnected();
   const end = useRef<HTMLDivElement>(null);
   const asked = useRef(false);
+  const { notify } = useUndo();
+  const voiceAvailable = useVoiceAvailable();
+  const voice = useVoice((spoken) => setText((t) => (t.trim() ? `${t.trimEnd()} ${spoken}` : spoken)), notify);
 
   useEffect(() => {
     try {
@@ -89,8 +94,15 @@ export function ChatScreen({ ask }: { ask?: string }) {
           {QUICK.map((q) => <button key={q} type="button" className="chip" disabled={busy || !connected} onClick={() => void send(q)}>{q}</button>)}
         </div>
         <form className="row" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); void send(text); }}>
-          <button type="button" className="iconbtn soon" disabled aria-label="הקלטה, בקרוב"><Icon name="mic" /></button>
-          <input className="field" aria-label="הודעה למתפעל" placeholder="כתוב הודעה…" autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
+          <button
+            type="button"
+            className={`iconbtn ${voice.state === "recording" ? "recording" : ""} ${voiceAvailable ? "" : "soon"}`}
+            disabled={!voiceAvailable || voice.state === "transcribing"}
+            aria-pressed={voice.state === "recording"}
+            aria-label={!voiceAvailable ? "הקלטה: התמלול לא מותקן במחשב" : voice.state === "recording" ? "עצור הקלטה" : voice.state === "transcribing" ? "מתמלל" : "הקלט"}
+            onClick={voice.toggle}
+          ><Icon name="mic" /></button>
+          <input className="field" aria-label="הודעה למתפעל" placeholder={voice.state === "recording" ? `מקליט ${clock(voice.seconds)}…` : voice.state === "transcribing" ? "מתמלל…" : "כתוב הודעה…"} autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
           <button type="submit" className="iconbtn pri" aria-label="שלח" disabled={busy || !connected || text.trim() === ""}><span style={{ display: "inline-flex", transform: "scaleX(-1)" }}><Icon name="send" size={18} color="#fff" width={2.2} /></span></button>
         </form>
       </div>
