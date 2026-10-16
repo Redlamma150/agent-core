@@ -183,6 +183,31 @@ describe("merge failures, stash and revert", () => {
   });
 });
 
+describe("scheduled tasks", () => {
+  it("creates a night task without starting it, and starting it by hand skips the wait", async () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p', '/r')").run();
+    const base = services(db);
+    const app = buildApp({ db, accessToken: TOKEN, ...base, nightHour: 3 });
+    const send = (method: "GET" | "POST", url: string, payload?: object) => app.inject({ method, url, headers: auth, payload });
+
+    expect((await send("GET", "/settings")).json()).toMatchObject({ night_hour: 3 });
+    const night = (await send("POST", "/tasks", { project_id: 1, description: "tonight", when: "night" })).json();
+    expect(night.scheduled_for).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+    expect(base.started).toEqual([]);
+    expect((await send("GET", `/tasks/${night.id}`)).json().scheduled_for).toBe(night.scheduled_for);
+
+    const started = await send("POST", `/tasks/${night.id}/start`, {});
+    expect(started.json().scheduled_for).toBeNull();
+    expect(base.started).toEqual([night.id]);
+
+    const now = (await send("POST", "/tasks", { project_id: 1, description: "now", when: "now" })).json();
+    expect(now.scheduled_for).toBeNull();
+    expect(base.started).toEqual([night.id, now.id]);
+    expect((await send("POST", "/tasks", { project_id: 1, description: "x", when: "later" })).statusCode).toBe(400);
+  });
+});
+
 describe("model and changes of a task", () => {
   it("reports the builder's model on the task and serves the stored file summary", async () => {
     const { db, app } = setup();
@@ -214,7 +239,7 @@ describe("insights and settings", () => {
     expect((await send("POST", "/insights/nope/apply")).statusCode).toBe(404);
     const applied = await send("POST", "/insights/auto_stash/apply");
     expect(applied.json()).toMatchObject([{ id: "auto_stash", applied: true }]);
-    expect((await send("GET", "/settings")).json()).toEqual({ auto_stash: true });
+    expect((await send("GET", "/settings")).json()).toMatchObject({ auto_stash: true });
     expect((await send("POST", "/insights/auto_stash/unapply")).json()).toEqual([]);
     expect((await send("PUT", "/settings", { auto_stash: true })).json()).toEqual({ auto_stash: true });
     expect((await send("PUT", "/settings", { auto_stash: "yes" })).statusCode).toBe(400);

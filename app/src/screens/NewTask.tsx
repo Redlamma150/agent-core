@@ -49,10 +49,12 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
   const [files, setFiles] = useState<File[]>([]);
   const [fileErrors, setFileErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [when, setWhen] = useState<"now" | "night">("now");
   const [needText, setNeedText] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState<{ id: number; failed: string[] } | null>(null);
   const connected = useConnected();
+  const nightHour = useApi<{ night_hour: number }>("/settings").data?.night_hour ?? 2;
 
   useEffect(() => {
     try {
@@ -83,11 +85,11 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
     try {
       const text = description.trim() || "בצע לפי הקבצים המצורפים.";
       // Created on hold, files uploaded, then started: the agent sees the files from its very first step.
-      const task = await api<{ id: number }>("/tasks", { method: "POST", body: { project_id: Number(projectId), description: text, flagged, hold: files.length > 0 } });
+      const task = await api<{ id: number }>("/tasks", { method: "POST", body: { project_id: Number(projectId), description: text, flagged, hold: files.length > 0, when } });
       if (files.length > 0) {
         const failed: string[] = [];
         for (const f of files) await uploadFile(task.id, f).catch(() => failed.push(f.name));
-        await api(`/tasks/${task.id}/start`, { method: "POST", body: {} });
+        if (when === "now") await api(`/tasks/${task.id}/start`, { method: "POST", body: {} }); // a night task waits for its time
         if (failed.length > 0) {
           setPartial({ id: task.id, failed });
           setBusy(false);
@@ -150,7 +152,9 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
 
         <div className="group">
           <span className="label">מתי</span>
-          <Segmented label="מתי" value="now" onChange={() => undefined} options={[{ value: "now", label: "עכשיו" }, { value: "night", label: "הלילה", disabled: true }, { value: "quota", label: "כשהמכסה מתחדשת", disabled: true }]} />
+          <Segmented<"now" | "night" | "quota"> label="מתי" value={when} onChange={(v) => v !== "quota" && setWhen(v)} options={[{ value: "now", label: "עכשיו" }, { value: "night", label: "הלילה" }, { value: "quota", label: "כשהמכסה מתחדשת", disabled: true }]} />
+          {when === "night" && <span className="muted">המשימה תתחיל ב-{String(nightHour).padStart(2, "0")}:00 והמחשב צריך להיות דלוק. אפשר להתחיל אותה קודם מהמסך שלה.</span>}
+          <span className="muted">"כשהמכסה מתחדשת" תגיע כשהמערכת תדע לזהות מתי המכסה מתחדשת. <span className="soon-tag">בקרוב</span></span>
         </div>
 
         <div className="card" style={{ gap: 14 }}>

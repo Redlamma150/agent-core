@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ApiError } from "../lib/api";
-import { relativeTime, taskTitle, type TaskRow } from "../lib/format";
+import { relativeTime, scheduleLabel, taskTitle, type TaskRow } from "../lib/format";
 import type { Loaded } from "../hooks";
 import { AiBadge, Skeleton, StatusPill } from "../ui";
 
@@ -45,6 +45,7 @@ export function taskReason(t: TaskRow): string | null {
   if (t.status === "blocked") return t.reason ?? "הסוכן לא הצליח להמשיך.";
   if (t.status === "awaiting_approval") return "הסוכן סיים, צריך את האישור שלך";
   if (t.status === "stopped") return t.reason;
+  if (t.status === "received" && t.scheduled_for) return `מתוזמנת: תתחיל ${scheduleLabel(t.scheduled_for)}`;
   return null;
 }
 

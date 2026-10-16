@@ -21,7 +21,7 @@ export interface ApiDeps extends Services {
   logStream?: NodeJS.WritableStream;
 }
 
-export function buildApp({ db, accessToken, tasks, approvals, driver, activity, media, local, operator, insights, settings, push, vapidPublicKey, staticDir, bus = new EventBus(), logger = false, logStream }: ApiDeps): FastifyInstance {
+export function buildApp({ db, accessToken, tasks, approvals, driver, activity, media, local, operator, insights, settings, nightHour, push, vapidPublicKey, staticDir, bus = new EventBus(), logger = false, logStream }: ApiDeps): FastifyInstance {
   const app = Fastify({
     logger: logger || logStream
       ? {
@@ -37,7 +37,7 @@ export function buildApp({ db, accessToken, tasks, approvals, driver, activity, 
   app.register(async (api) => {
     registerAuth(api, accessToken);
     registerEvents(api, bus);
-    registerRoutes(api, db, { tasks, approvals, driver, activity, media, local, operator, insights, settings });
+    registerRoutes(api, db, { tasks, approvals, driver, activity, media, local, operator, insights, settings, nightHour });
     registerPush(api, push, vapidPublicKey);
   });
 
