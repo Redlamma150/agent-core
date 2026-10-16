@@ -181,6 +181,16 @@ describe("listening", () => {
     expect((await reader.read()).done).toBe(true);
   });
 
+  it("skips an address that does not exist on this computer instead of crashing", async () => {
+    const db = openDb(":memory:");
+    const warnings: string[] = [];
+    // 192.0.2.1 is reserved for documentation: no machine has it, like a Tailscale IP while Tailscale is off.
+    servers = await startServers({ db, accessToken: TOKEN, ...services(db) }, ["127.0.0.1", "192.0.2.1"], 0, (l) => warnings.push(l));
+    expect(servers).toHaveLength(1);
+    expect(warnings[0]).toContain("192.0.2.1");
+    await expect(startServers({ db, accessToken: TOKEN, ...services(db) }, ["192.0.2.1"], 0, () => {})).rejects.toThrow(/none of the addresses/);
+  });
+
   it("does not answer on an address outside the bind list", async () => {
     const db = openDb(":memory:");
     servers = await startServers({ db, accessToken: TOKEN, ...services(db) }, ["127.0.0.1"], 0);
