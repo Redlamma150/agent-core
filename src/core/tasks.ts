@@ -185,7 +185,7 @@ export class TaskService {
     const purge = this.db.transaction((ids: number[]) => {
       for (const id of ids) {
         this.db.prepare("UPDATE llm_calls SET task_id = NULL WHERE task_id = ?").run(id);
-        for (const table of ["activity", "approvals", "steps"]) this.db.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(id);
+        for (const table of ["activity", "attachments", "approvals", "steps"]) this.db.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(id);
         this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
       }
     });

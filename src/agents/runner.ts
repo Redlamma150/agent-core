@@ -21,6 +21,8 @@ export interface RunRequest {
    */
   tools?: string[];
   allowedTools?: string[];
+  /** Extra folders the agent may read besides its working directory (the owner's attached files). */
+  extraDirs?: string[];
   /** Settings files to load. Default none: cheaper, and the agent does not pick up personal settings. */
   settingSources?: SettingSource[];
   permissionMode?: PermissionMode;
@@ -86,6 +88,7 @@ export class AgentRunner {
         cwd: req.cwd,
         tools: req.tools,
         allowedTools: req.allowedTools,
+        additionalDirectories: req.extraDirs,
         // "//abs/path" is the permission-rule syntax for an absolute path. Denied for every tool that can read files.
         disallowedTools: this.protectedPaths.flatMap((p) => [`Read(/${p})`, `Read(/${p}/**)`, `Edit(/${p})`, `Edit(/${p}/**)`]),
         permissionMode: req.permissionMode,

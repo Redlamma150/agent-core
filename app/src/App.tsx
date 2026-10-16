@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { LiveContext, useApi, useRoute } from "./hooks";
-import { api, setUnauthorizedHandler, streamEvents, tokenStore } from "./lib/api";
+import { api, consumeTokenFromHash, setUnauthorizedHandler, streamEvents, tokenStore } from "./lib/api";
 import { ApprovalsScreen } from "./screens/Approvals";
 import { ChatScreen } from "./screens/Chat";
 import { LoginScreen } from "./screens/Login";
@@ -19,7 +19,10 @@ const TABS = [
 ];
 
 export function App() {
-  const [authed, setAuthed] = useState(() => tokenStore.get() !== null);
+  const [authed, setAuthed] = useState(() => {
+    consumeTokenFromHash();
+    return tokenStore.get() !== null;
+  });
   useEffect(() => setUnauthorizedHandler(() => {
     tokenStore.clear();
     setAuthed(false);

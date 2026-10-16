@@ -262,7 +262,7 @@ describe("task API", () => {
     expect(steps.map((s) => s.to_status).filter(Boolean)).toContain("blocked");
     t.activity.record(task.id, "builder", "Read", "a.ts");
     expect((await app.inject({ url: `/tasks/${task.id}/activity`, headers: auth })).json()).toMatchObject([{ tool: "Read", target: "a.ts" }]);
-    expect((await app.inject({ url: "/projects", headers: auth })).json()).toEqual([{ id: 1, name: "proj" }]);
+    expect((await app.inject({ url: "/projects", headers: auth })).json()).toEqual([expect.objectContaining({ id: 1, name: "proj" })]);
     expect((await app.inject({ url: "/projects", headers: {} })).statusCode).toBe(401);
   });
 

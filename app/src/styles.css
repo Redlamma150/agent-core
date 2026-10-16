@@ -129,3 +129,13 @@ dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; }
 .chat li { padding: 8px 12px; border-radius: 12px; max-width: 85%; overflow-wrap: anywhere; }
 .chat .me { background: var(--accent); color: var(--accent-ink); justify-self: start; } .chat .system { background: var(--surface); border: 1px solid var(--border); justify-self: end; }
 .chatform { display: flex; gap: 8px; } .chatform input { flex: 1; }
+
+.path { overflow-wrap: anywhere; user-select: all; }
+.dropzone { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--border); border-radius: 12px; }
+.dropzone.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.attachments { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.attachments li { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.attachments .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachments button { min-height: 36px; padding: 0 10px; }
+.thumb { width: 48px; height: 48px; border-radius: 8px; object-fit: cover; flex: none; border: 1px solid var(--border); background: var(--raised); }
+.thumb.file { display: grid; place-items: center; font-size: .72rem; font-weight: 700; color: var(--muted); }

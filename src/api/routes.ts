@@ -1,10 +1,15 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Db } from "../db/index.js";
 import { AlreadyResolvedError, type ApprovalService } from "../core/approvals.js";
 import { MergeError } from "../core/git.js";
 import type { TaskDriver } from "../core/pipeline.js";
 import type { ActivityService } from "../core/activity.js";
+import { createReadStream, existsSync } from "node:fs";
+import { basename } from "node:path";
+import { LocalActionError, isLocalRequest, type LocalActions } from "../core/local.js";
+import { ALLOWED_MIME, MAX_FILE_BYTES, MediaError, type MediaService } from "../core/media.js";
+import { registerProject } from "../core/projects.js";
 import { InvalidActionError, InvalidTransitionError, NotFoundError, type TaskService } from "../core/tasks.js";
 
 const notImplemented = (reply: FastifyReply, milestone: string) =>
@@ -21,7 +26,7 @@ const VIEWS: Record<string, string> = {
   trash: "t.deleted_at IS NOT NULL",
 };
 
-const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional() });
+const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional() });
 const editTaskBody = z.object({ title: z.string().trim().min(1).max(80).optional(), description: z.string().trim().min(1).max(5000).optional() }).refine((b) => b.title !== undefined || b.description !== undefined, "nothing to change");
 const continueBody = z.object({ note: z.string().trim().max(5000).optional() });
 const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z.string().max(5000).optional() });
@@ -31,13 +36,18 @@ export interface Services {
   approvals: ApprovalService;
   driver: TaskDriver;
   activity?: ActivityService;
+  media?: MediaService;
+  local?: LocalActions;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message });
     if (err instanceof InvalidActionError || err instanceof InvalidTransitionError || err instanceof AlreadyResolvedError) return reply.code(409).send({ error: "conflict", message: err.message });
+    if (err instanceof MediaError) return reply.code(400).send({ error: "media", message: err.message });
+    if (err instanceof LocalActionError) return reply.code(501).send({ error: "local_unavailable", message: err.message });
+    if (err instanceof Error && "statusCode" in err && err.statusCode === 413) return reply.code(413).send({ error: "media", message: "הקובץ גדול מדי (עד 15MB)." });
     if (err instanceof z.ZodError) return reply.code(400).send({ error: "invalid_body", issues: err.issues.map((i) => i.message) });
     if (err instanceof Error && "statusCode" in err && typeof err.statusCode === "number" && err.statusCode < 500) {
       return reply.code(err.statusCode).send({ error: "bad_request" });
@@ -54,13 +64,110 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
     if (!where) return reply.code(400).send({ error: "invalid_view" });
     return db.prepare(`SELECT ${TASK_COLUMNS}, ${REASON} ${TASK_FROM} WHERE ${where} ORDER BY t.id DESC LIMIT 200`).all();
   });
-  app.get("/projects", async () => db.prepare("SELECT id, name FROM projects ORDER BY name").all());
+  app.get("/projects", async () => db.prepare("SELECT id, name, repo_path FROM projects ORDER BY name").all());
+
+  // ---- things that only work from this computer itself (not from the phone) ----------------------------------------
+  const localOnly = (req: FastifyRequest, reply: FastifyReply): boolean => {
+    if (local && isLocalRequest(req)) return true;
+    reply.code(403).send({ error: "local_only", message: "הפעולה זמינה רק מהמחשב עצמו, לא מהנייד." });
+    return false;
+  };
+  const openBody = z.object({ target: z.enum(["folder", "editor"]) });
+
+  app.get<{ Params: { id: string } }>("/tasks/:id/location", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    tasks.get(id);
+    return driver.locate(id);
+  });
+  app.post<{ Params: { id: string } }>("/tasks/:id/open", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    if (!localOnly(req, reply)) return;
+    const where = (tasks.get(id), driver.locate(id));
+    if (!where.exists) return reply.code(404).send({ error: "not_found", message: "התיקייה כבר לא קיימת." });
+    await local!.open(where.path, openBody.parse(req.body).target);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string } }>("/projects/:id/open", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    if (!localOnly(req, reply)) return;
+    const row = db.prepare("SELECT repo_path FROM projects WHERE id = ?").get(id) as { repo_path: string } | undefined;
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    if (!existsSync(row.repo_path)) return reply.code(404).send({ error: "not_found", message: "התיקייה כבר לא קיימת." });
+    await local!.open(row.repo_path, openBody.parse(req.body).target);
+    return reply.code(204).send();
+  });
+  /** Opens the native folder dialog on the computer and returns the chosen path (null if cancelled). */
+  app.post("/projects/pick", async (req, reply) => {
+    if (!localOnly(req, reply)) return;
+    return { path: await local!.pickFolder() };
+  });
+  app.post("/projects", async (req, reply) => {
+    if (!localOnly(req, reply)) return;
+    const body = z.object({ path: z.string().trim().min(1), name: z.string().trim().min(1).max(60).optional(), test_command: z.string().trim().max(200).optional() }).parse(req.body);
+    try {
+      const { id, warnings } = await registerProject(db, { name: body.name ?? (basename(body.path) || body.path), repoPath: body.path, testCommand: body.test_command });
+      return reply.code(201).send({ id, warnings });
+    } catch (err) {
+      return reply.code(400).send({ error: "invalid_project", message: (err as Error).message });
+    }
+  });
+
+  // ---- attachments -------------------------------------------------------------------------------------------------
+  // Raw bytes in the body, the file name in ?name=. One request per file.
+  app.addContentTypeParser([...ALLOWED_MIME], { parseAs: "buffer", bodyLimit: MAX_FILE_BYTES }, (_req, body, done) => done(null, body));
+  app.get<{ Params: { id: string } }>("/tasks/:id/media", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    tasks.get(id);
+    return media?.list(id) ?? [];
+  });
+  app.post<{ Params: { id: string }; Querystring: { name?: string } }>("/tasks/:id/media", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    if (!media) return reply.code(501).send({ error: "not_implemented" });
+    const mime = (req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+    if (!Buffer.isBuffer(req.body)) throw new MediaError("סוג הקובץ לא נתמך. אפשר תמונות, PDF וקבצי טקסט.");
+    return reply.code(201).send(media.save(id, req.query.name ?? "file", mime, req.body));
+  });
+  app.get<{ Params: { id: string; mid: string } }>("/tasks/:id/media/:mid", async (req, reply) => {
+    const id = taskId(req.params.id);
+    const mid = taskId(req.params.mid);
+    if (id === null || mid === null) return reply.code(400).send({ error: "invalid_id" });
+    if (!media) return reply.code(501).send({ error: "not_implemented" });
+    const f = media.file(id, mid);
+    if (!existsSync(f.path)) return reply.code(404).send({ error: "not_found" });
+    return reply
+      .header("content-type", f.mime)
+      .header("x-content-type-options", "nosniff")
+      .header("content-security-policy", "sandbox")
+      .header("content-disposition", `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`)
+      .send(createReadStream(f.path));
+  });
+  app.delete<{ Params: { id: string; mid: string } }>("/tasks/:id/media/:mid", async (req, reply) => {
+    const id = taskId(req.params.id);
+    const mid = taskId(req.params.mid);
+    if (id === null || mid === null) return reply.code(400).send({ error: "invalid_id" });
+    media?.remove(id, mid);
+    return reply.code(204).send();
+  });
   app.post("/tasks", async (req, reply) => {
     const body = createTaskBody.parse(req.body);
     if (!db.prepare("SELECT 1 FROM projects WHERE id = ?").get(body.project_id)) return reply.code(404).send({ error: "project_not_found" });
     const task = tasks.create(body.project_id, body.description, body.flagged);
-    driver.start(task.id);
+    // `hold`: the app attaches files first and then starts the task, so the agent sees them from its first step.
+    if (!body.hold) driver.start(task.id);
     return reply.code(201).send(task);
+  });
+  app.post<{ Params: { id: string } }>("/tasks/:id/start", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    const task = tasks.get(id);
+    if (task.status !== "received") throw new InvalidActionError(`task is already ${task.status}`);
+    driver.start(id);
+    return oneTask(id);
   });
 
   app.get<{ Params: { id: string } }>("/tasks/:id", async (req, reply) => {

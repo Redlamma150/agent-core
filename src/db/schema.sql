@@ -87,3 +87,14 @@ CREATE TABLE IF NOT EXISTS activity (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_activity_task ON activity(task_id, id);
+
+CREATE TABLE IF NOT EXISTS attachments (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id    INTEGER NOT NULL REFERENCES tasks(id),
+  name       TEXT NOT NULL,
+  mime       TEXT NOT NULL,
+  size       INTEGER NOT NULL,
+  path       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id);

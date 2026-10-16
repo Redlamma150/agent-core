@@ -15,8 +15,13 @@ export function State<T>({ q, children }: { q: Loaded<T>; children: (data: T) =>
   );
 }
 
+/** Errors whose message the core wrote for the owner (in Hebrew): upload rules, computer-only actions, project checks. */
+const FRIENDLY = new Set(["media", "local_only", "local_unavailable", "invalid_project", "not_found"]);
+
 export function errorText(err: unknown): string {
   if (err instanceof ApiError) {
+    const body = err.body as { error?: string; message?: string } | null;
+    if (body?.error && FRIENDLY.has(body.error) && body.message) return body.message;
     if (err.status === 409) return "הפעולה כבר לא רלוונטית (המצב השתנה).";
     if (err.status === 404) return "הפריט לא נמצא.";
     if (err.status === 400) return "הקלט לא תקין.";

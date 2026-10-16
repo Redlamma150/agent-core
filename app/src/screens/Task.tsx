@@ -3,6 +3,7 @@ import { useApi, useTick } from "../hooks";
 import { api } from "../lib/api";
 import { activityLabel, formatDate, formatNumber, RUNNING, relativeTime, STAGES, stageOf, stepLabel, taskTitle, type TaskRow } from "../lib/format";
 import { errorText, State, StatusChip } from "./common";
+import { TaskAttachments } from "./media";
 
 interface ActivityRow { id: number; agent: string; tool: string; target: string | null; created_at: string }
 interface StepRow { id: number; agent: string; status: string; from_status: string | null; to_status: string | null; summary: string | null; created_at: string }
@@ -94,6 +95,9 @@ function TaskView({ t, reload }: { t: TaskRow; reload: () => void }) {
 
       {!trashed && !editing && <Actions t={t} act={act} onEdit={() => setEditing(true)} />}
 
+      <TaskAttachments taskId={t.id} editable={!trashed && t.status !== "merged"} />
+      <LocationCard taskId={t.id} status={t.status} />
+
       {!running && feed.data && feed.data.length > 0 && (
         <details className="card">
           <summary>מה הסוכן עשה ({feed.data.length} פעולות)</summary>
@@ -125,6 +129,46 @@ function TaskView({ t, reload }: { t: TaskRow; reload: () => void }) {
         </dl>
       </div>
     </>
+  );
+}
+
+/** Where the work is on the computer, with one-tap buttons. The buttons only work from the computer itself, not the phone. */
+function LocationCard({ taskId, status }: { taskId: number; status: string }) {
+  const where = useApi<{ path: string; kind: "worktree" | "project"; exists: boolean }>(`/tasks/${taskId}/location`);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  if (!where.data) return null;
+  const { path, kind, exists } = where.data;
+  async function open(target: "folder" | "editor") {
+    setMsg(null);
+    try {
+      await api(`/tasks/${taskId}/open`, { method: "POST", body: { target } });
+    } catch (err) {
+      setMsg(errorText(err));
+    }
+  }
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setMsg("ההעתקה לא נתמכת כאן. הנתיב מוצג למעלה.");
+    }
+  }
+  return (
+    <div className="card">
+      <h3>{kind === "worktree" ? "איפה העבודה נמצאת" : status === "merged" ? "השינוי מוזג לפרויקט" : "תיקיית הפרויקט"}</h3>
+      <p className="muted small path"><bdi>{path}</bdi></p>
+      {exists ? (
+        <div className="actions">
+          <button className="primary" onClick={() => open("folder")}>פתח תיקייה</button>
+          <button onClick={() => open("editor")}>פתח בעורך</button>
+          <button className="quiet" onClick={copy}>{copied ? "הועתק ✓" : "העתק נתיב"}</button>
+        </div>
+      ) : <p className="muted small">התיקייה כבר לא קיימת.</p>}
+      {msg && <p className="error" role="alert">{msg}</p>}
+    </div>
   );
 }
 
