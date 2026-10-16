@@ -31,6 +31,8 @@ const schema = z.object({
   REMINDER_MINUTES: positiveInt("REMINDER_MINUTES").default(10),
   REMINDER_COUNT: positiveInt("REMINDER_COUNT").default(2),
   DB_PATH: required("DB_PATH").default("./data/core.db"),
+  /** Longest a single task may run before it is parked as blocked, so one stuck task cannot hold up the queue. */
+  TASK_TIMEOUT_MINUTES: positiveInt("TASK_TIMEOUT_MINUTES").default(45),
   STATIC_DIR: required("STATIC_DIR").default("./app/dist"),
   /** Keep the Mac from going to sleep while the core runs (macOS only), so the phone can always reach it. */
   KEEP_AWAKE: z.enum(["true", "false"], { error: "Env var KEEP_AWAKE must be true or false" }).default("true"),

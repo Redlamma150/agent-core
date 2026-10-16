@@ -23,6 +23,12 @@ describe("keepAwake", () => {
     expect(s.calls).toHaveLength(0);
     expect(keepAwake(1, "darwin", () => { throw new Error("no caffeinate"); })).toBe(false);
   });
+  it("has a 45 minute task time limit by default and rejects nonsense", () => {
+    const base = { API_BIND_HOSTS: "127.0.0.1", APP_ACCESS_TOKEN: "a".repeat(32), VAPID_PUBLIC_KEY: "k", VAPID_PRIVATE_KEY: "k", VAPID_SUBJECT: "mailto:a@b.c", DB_PATH: "./x.db" };
+    expect(loadConfig(base).TASK_TIMEOUT_MINUTES).toBe(45);
+    expect(loadConfig({ ...base, TASK_TIMEOUT_MINUTES: "90" }).TASK_TIMEOUT_MINUTES).toBe(90);
+    expect(() => loadConfig({ ...base, TASK_TIMEOUT_MINUTES: "0" })).toThrow(/TASK_TIMEOUT_MINUTES/);
+  });
   it("is on by default and can be turned off in the config", () => {
     const base = { API_BIND_HOSTS: "127.0.0.1", APP_ACCESS_TOKEN: "a".repeat(32), VAPID_PUBLIC_KEY: "k", VAPID_PRIVATE_KEY: "k", VAPID_SUBJECT: "mailto:a@b.c", DB_PATH: "./x.db" };
     expect(loadConfig(base).KEEP_AWAKE).toBe("true");

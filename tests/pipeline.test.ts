@@ -23,7 +23,7 @@ const handoff = (taskId: number, agent: Role, over: Record<string, unknown> = {}
 const done = (structured: unknown): SDKMessage =>
   ({ type: "result", subtype: "success", is_error: false, result: "", structured_output: structured, modelUsage: { m: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 } } }) as unknown as SDKMessage;
 
-async function setup(behaviour: Partial<Record<Role, Behaviour>> = {}) {
+async function setup(behaviour: Partial<Record<Role, Behaviour>> = {}, timeoutMs?: number) {
   const { repo, git } = await makeRepo();
   const db = openDb(":memory:");
   db.prepare("INSERT INTO projects (name, repo_path) VALUES ('proj', ?)").run(repo);
@@ -43,7 +43,7 @@ async function setup(behaviour: Partial<Record<Role, Behaviour>> = {}) {
     } else yield done(handoff(taskId, "planner", { open_items: ["צור את hello.txt"] }));
   };
   const runner = new AgentRunner(db, tasks, query);
-  const pipeline = new Pipeline({ db, tasks, approvals, runner, budget: new BudgetService(tasks, 1_000_000), git }, () => {});
+  const pipeline = new Pipeline({ db, tasks, approvals, runner, budget: new BudgetService(tasks, 1_000_000), git, timeoutMs }, () => {});
   const task = tasks.create(1, "add hello.txt");
   return { repo, db, tasks, approvals, pipeline, calls, task, git, runner, budgetCap: 1_000_000 };
 }
@@ -170,6 +170,34 @@ describe("pipeline", () => {
     await t.pipeline.idle();
     expect(t.tasks.get(t.task.id).status).toBe("stopped");
     expect(t.approvals.pending()).toHaveLength(0);
+  });
+
+  it("blocks a task that runs past the time limit, aborts its agent and keeps the queue moving", async () => {
+    let signal: AbortSignal | undefined;
+    // The builder hangs and ignores the abort completely (the worst case): it never returns.
+    const t = await setup({ builder: async ({ options }) => { signal = options.abortController?.signal; return new Promise(() => {}); } }, 150);
+    t.pipeline.start(t.task.id);
+    await t.pipeline.idle();
+    expect(signal?.aborted).toBe(true);
+    expect(t.tasks.get(t.task.id).status).toBe("blocked");
+    const why = t.db.prepare("SELECT summary FROM steps WHERE to_status = 'blocked'").get() as { summary: string };
+    expect(why.summary).toContain("נעצרה");
+    expect(t.approvals.pending()).toHaveLength(0);
+
+    // the next task is not held up by the hung one
+    const other = t.tasks.create(1, "second");
+    t.calls.length = 0;
+    t.pipeline.start(other.id);
+    await t.pipeline.idle();
+    expect(t.calls.length).toBeGreaterThan(0);
+    expect(t.tasks.get(other.id).status).toBe("blocked"); // same hung builder, same limit: the point is that it got to run
+  });
+
+  it("a task that finishes in time is untouched by the limit, and continuing starts a fresh clock", async () => {
+    const t = await setup({}, 5_000);
+    t.pipeline.start(t.task.id);
+    await t.pipeline.idle();
+    expect(t.tasks.get(t.task.id).status).toBe("awaiting_approval");
   });
 
   it("after a restart in the middle of building, resumes at the builder with the saved plan", async () => {

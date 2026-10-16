@@ -62,9 +62,12 @@ export class PushService {
   }
 }
 
-/** Notification texts carry no task content: the app shows details after the owner opens it. */
+/**
+ * Notification texts carry no task content (no descriptions, file names or code). The one free-text part is the short
+ * Hebrew reason a task got stuck, which the core wrote or the agent summarised in one sentence.
+ */
 export function notificationFor(event: CoreEvent): PushPayload | null {
-  const d = event.data as { task_id?: number; status?: string; number?: number; percent?: number };
+  const d = event.data as { task_id?: number; status?: string; number?: number; percent?: number; reason?: string };
   if (event.type === "approval" && d.status === "pending") {
     return { title: "בקשת אישור חדשה", body: `משימה #${d.task_id} ממתינה לאישור שלך`, url: "/#/approvals" };
   }
@@ -72,7 +75,14 @@ export function notificationFor(event: CoreEvent): PushPayload | null {
     return { title: "תזכורת לאישור", body: `משימה #${d.task_id} עדיין ממתינה לאישור (תזכורת ${d.number})`, url: "/#/approvals" };
   }
   if (event.type === "blocked") {
-    return { title: "משימה נתקעה", body: `משימה #${d.task_id} נתקעה וצריכה אותך`, url: `/#/tasks/${d.task_id}` };
+    const reason = d.reason ? `: ${d.reason}` : " וצריכה אותך";
+    return { title: "משימה נתקעה", body: `משימה #${d.task_id} נתקעה${reason}`, url: `/#/tasks/${d.task_id}` };
+  }
+  if (event.type === "stopped") {
+    return { title: "המשימה נעצרה", body: `משימה #${d.task_id} נעצרה על ידך`, url: `/#/tasks/${d.task_id}` };
+  }
+  if (event.type === "merged") {
+    return { title: "המשימה מוזגה", body: `משימה #${d.task_id} אושרה ומוזגה לפרויקט`, url: `/#/tasks/${d.task_id}` };
   }
   if (event.type === "budget" && d.percent === 100) {
     return { title: "המשימה נעצרה בתקרה", body: `משימה #${d.task_id} הגיעה לתקרת הטוקנים ונעצרה`, url: `/#/tasks/${d.task_id}` };

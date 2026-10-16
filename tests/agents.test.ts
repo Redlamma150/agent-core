@@ -268,6 +268,12 @@ describe("token cap", () => {
     expect(t.db.prepare("SELECT COUNT(*) AS n FROM steps WHERE status = 'budget_warning'").get()).toEqual({ n: 1 });
   });
 
+  it("an agent that reports itself blocked sends a Hebrew reason with the alert", async () => {
+    const t = setup([() => result(good(1, { status: "blocked", summary: "חסר קובץ עיצוב. אני צריך אותו כדי להמשיך." }))]);
+    expect((await t.run()).kind).toBe("blocked");
+    expect(t.events.find((e) => e.type === "blocked")).toEqual({ type: "blocked", data: { task_id: t.task.id, reason: "הסוכן דיווח שהוא תקוע: חסר קובץ עיצוב." } });
+  });
+
   it("does not start a call when the cap is already used up", async () => {
     const t = setup([], 1000);
     t.tasks.addTokens(t.task.id, 1000);

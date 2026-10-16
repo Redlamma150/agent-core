@@ -36,7 +36,7 @@ attachPush(bus, push);
 const media = new MediaService(db, join(dirname(config.DB_PATH), "uploads"));
 const budget = new BudgetService(tasks, config.TASK_TOKEN_CAP, bus);
 const runner = new AgentRunner(db, tasks, undefined, activity, protectedPathsFor(config.DB_PATH));
-const pipeline = new Pipeline({ db, tasks, approvals, runner, budget, git: new GitService(join(dirname(config.DB_PATH), "worktrees")), activity, media });
+const pipeline = new Pipeline({ db, tasks, approvals, runner, budget, git: new GitService(join(dirname(config.DB_PATH), "worktrees")), activity, media, timeoutMs: config.TASK_TIMEOUT_MINUTES * 60_000 });
 const operator = new OperatorService({ db, tasks, driver: pipeline, runner }, join(dirname(config.DB_PATH), "operator"));
 const resumed = pipeline.resume();
 if (resumed > 0) console.log(`resuming ${resumed} unfinished task(s)`);

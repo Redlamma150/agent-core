@@ -133,3 +133,70 @@ describe("stuck and capped tasks", () => {
     expect(notificationFor(caps[0]!)?.title).toBe("המשימה נעצרה בתקרה");
   });
 });
+
+describe("alerts with a reason in Hebrew", () => {
+  async function world() {
+    const { TaskService } = await import("../src/core/tasks.js");
+    const { ApprovalService } = await import("../src/core/approvals.js");
+    const { EventBus } = await import("../src/api/events.js");
+    const { openDb } = await import("../src/db/index.js");
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO projects (name, repo_path) VALUES ('secret-project-name','/r')").run();
+    const bus = new EventBus();
+    const events: { type: string; data: unknown }[] = [];
+    bus.subscribe((e) => events.push(e));
+    const tasks = new TaskService(db, bus);
+    const approvals = new ApprovalService(db, tasks, { reminderMinutes: 10, reminderCount: 2 }, bus);
+    return { db, tasks, approvals, events, push: () => events.map((e) => notificationFor(e)).filter(Boolean) };
+  }
+
+  it("a blocked task says why, in Hebrew, without technical details", async () => {
+    const w = await world();
+    const t = w.tasks.create(1, "private description");
+    w.tasks.transition(t.id, "blocked", "error: ENOENT /Users/me/secret/file", "שגיאה לא צפויה בליבה");
+    const [n] = w.push();
+    expect(n).toMatchObject({ title: "משימה נתקעה", body: `משימה #${t.id} נתקעה: שגיאה לא צפויה בליבה`, url: `/#/tasks/${t.id}` });
+    expect(JSON.stringify(n)).not.toMatch(/ENOENT|secret|private/);
+  });
+
+  it("falls back to a generic line when no reason was given", async () => {
+    const w = await world();
+    const t = w.tasks.create(1, "x");
+    w.tasks.transition(t.id, "blocked", "technical");
+    expect(w.push()[0]?.body).toBe(`משימה #${t.id} נתקעה וצריכה אותך`);
+  });
+
+  it("tells the owner when a task is stopped by them, and when it is merged", async () => {
+    const w = await world();
+    const a = w.tasks.create(1, "a");
+    w.tasks.stop(a.id);
+    expect(w.push().map((n) => n?.title)).toEqual(["המשימה נעצרה"]);
+
+    const b = w.tasks.create(1, "b");
+    w.tasks.transition(b.id, "planning");
+    w.tasks.transition(b.id, "in_progress");
+    const approval = w.approvals.request(b.id, "ok");
+    w.approvals.resolve(approval.id, true);
+    expect(w.push().map((n) => n?.title)).toContain("המשימה מוזגה");
+  });
+
+  it("a token-cap stop gives one alert, not two", async () => {
+    const w = await world();
+    const { BudgetService } = await import("../src/core/budget.js");
+    const t = w.tasks.create(1, "c");
+    w.tasks.addTokens(t.id, 500);
+    new BudgetService(w.tasks, 100).enforce(t.id); // no bus on the budget service: only the task-level events fire
+    expect(w.push().map((n) => n?.title)).not.toContain("המשימה נעצרה");
+  });
+});
+
+describe("shortReason", () => {
+  it("keeps the first sentence and shortens long ones", async () => {
+    const { shortReason } = await import("../src/agents/execute.js");
+    expect(shortReason("חסר קובץ עיצוב. צריך להשיג אותו.")).toBe("חסר קובץ עיצוב.");
+    expect(shortReason("שורה ראשונה\nשורה שנייה")).toBe("שורה ראשונה");
+    const long = shortReason("א".repeat(300));
+    expect(long.length).toBeLessThanOrEqual(90);
+    expect(long.endsWith("…")).toBe(true);
+  });
+});

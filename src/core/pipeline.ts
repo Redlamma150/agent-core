@@ -47,7 +47,7 @@ export class Pipeline implements TaskDriver {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
-    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService; media?: MediaService },
+    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService; media?: MediaService; timeoutMs?: number },
     private log: (line: string) => void = console.log,
   ) {}
 
@@ -58,14 +58,41 @@ export class Pipeline implements TaskDriver {
       this.waiting.delete(taskId);
       const abort = new AbortController();
       this.active.set(taskId, abort);
+      let timer: NodeJS.Timeout | undefined;
+      // After the time limit the task is blocked and the agent is told to stop. The queue moves on even if the agent
+      // ignores that: one hung task must never hold up all the others.
+      const timedOut = new Promise<void>((resolve) => {
+        const limit = this.d.timeoutMs;
+        if (!limit) return;
+        timer = setTimeout(() => {
+          this.timeOut(taskId, abort, limit);
+          resolve();
+        }, limit);
+      });
       try {
-        await this.drive(taskId, abort.signal, notes);
+        await Promise.race([this.drive(taskId, abort.signal, notes), timedOut]);
       } catch (err) {
         this.fail(taskId, err);
       } finally {
+        clearTimeout(timer);
         this.active.delete(taskId);
       }
     });
+  }
+
+  /** The task ran longer than allowed: park it as blocked (the owner gets the "stuck" alert) and abort the agent. */
+  private timeOut(taskId: number, abort: AbortController, limitMs: number): void {
+    const minutes = Math.max(1, Math.round(limitMs / 60_000));
+    this.log(`task ${taskId} exceeded the time limit (${minutes} min)`);
+    try {
+      const status = this.d.tasks.get(taskId).status;
+      if (status === "received" || status === "planning" || status === "in_progress") {
+        this.d.tasks.transition(taskId, "blocked", `המשימה רצה יותר מ${minutes === 1 ? "דקה" : `-${minutes} דקות`} ונעצרה. אפשר להמשיך אותה מאותו מקום.`, `חרגה ממגבלת הזמן (${minutes === 1 ? "דקה" : `${minutes} דקות`})`);
+      }
+    } catch {
+      // the task vanished or changed under us: aborting below is still right
+    }
+    abort.abort();
   }
 
   /** Resolves when every queued task run has finished (used by tests and graceful shutdown). */
@@ -204,11 +231,11 @@ export class Pipeline implements TaskDriver {
     try {
       await git.commitAll(prepared.worktree, `task-${task.id}: ${task.description.split("\n")[0]?.slice(0, 60) ?? ""}`);
     } catch (err) {
-      if (err instanceof SecretFileError) return void tasks.transition(task.id, "blocked", err.message);
+      if (err instanceof SecretFileError) return void tasks.transition(task.id, "blocked", err.message, "נמצא קובץ שנראה כמו סוד (מפתח או סיסמה), ולכן לא נשמר");
       throw err;
     }
     const files = await git.changedFiles(project.repo_path, prepared.base, prepared.branch);
-    if (files.length === 0) return void tasks.transition(task.id, "blocked", "הבונה סיים בלי לשנות שום קובץ");
+    if (files.length === 0) return void tasks.transition(task.id, "blocked", "הבונה סיים בלי לשנות שום קובץ", "הסוכן סיים בלי לשנות אף קובץ");
 
     const tests = project.test_command ? await this.verify(task.id, project.test_command, prepared.worktree) : null;
 
@@ -260,7 +287,7 @@ export class Pipeline implements TaskDriver {
     this.log(`task ${taskId} failed: ${message}`);
     try {
       const status = this.d.tasks.get(taskId).status;
-      if (!TERMINAL.has(status) && status !== "blocked") this.d.tasks.transition(taskId, "blocked", `error: ${message}`);
+      if (!TERMINAL.has(status) && status !== "blocked") this.d.tasks.transition(taskId, "blocked", `error: ${message}`, "שגיאה לא צפויה בליבה");
     } catch {
       // the task vanished or is already final: nothing more to record
     }
