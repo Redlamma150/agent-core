@@ -10,6 +10,7 @@ import type { MediaService } from "./media.js";
 import type { Approval, ApprovalService } from "./approvals.js";
 import type { BudgetService } from "./budget.js";
 import { SecretFileError, type GitService } from "./git.js";
+import type { ScreenshotService } from "./screenshots.js";
 import { runTests } from "./verify.js";
 import { InvalidActionError, type Task, type TaskService } from "./tasks.js";
 
@@ -35,6 +36,7 @@ export interface TaskDriver {
 }
 
 const TERMINAL = new Set(["merged", "stopped"]);
+const SCREENSHOT_LIMIT_MS = 90_000;
 
 /**
  * Runs a task end to end: planner (read-only) -> builder on branch `task-<id>` -> approval request.
@@ -47,7 +49,7 @@ export class Pipeline implements TaskDriver {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
-    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService; media?: MediaService; timeoutMs?: number },
+    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService; media?: MediaService; screenshots?: ScreenshotService; timeoutMs?: number },
     private log: (line: string) => void = console.log,
   ) {}
 
@@ -242,6 +244,8 @@ export class Pipeline implements TaskDriver {
     const lines = [`הבונה סיים את משימה #${task.id} בענף ${prepared.branch}\u200F.`, out.handoff.summary, `קבצים ששונו (${files.length}):\n${files.join("\n")}`];
     if (out.handoff.open_items.length > 0) lines.push(`שים לב: ${out.handoff.open_items.join("; ")}`);
     if (tests) lines.push(tests);
+    const shots = await this.capture(task.id, { repo: project.repo_path, base: prepared.base, worktree: prepared.worktree, changedFiles: files });
+    if (shots) lines.push(shots);
     if (plan?.needs_approval) lines.push("המתכנן סימן את המשימה כרגישה, כדאי לבדוק היטב לפני אישור.");
     approvals.request(task.id, lines.join("\n"));
   }
@@ -252,6 +256,31 @@ export class Pipeline implements TaskDriver {
     const result = await runTests(command, cwd);
     this.d.tasks.note(taskId, result.passed ? "tests_passed" : "tests_failed", result.summary);
     return result.summary;
+  }
+
+  /**
+   * Takes before and after screenshots for the approval screen. Best effort: a missing browser or a broken page is
+   * recorded in the task history and never blocks the approval.
+   */
+  private async capture(taskId: number, input: Parameters<ScreenshotService["capture"]>[1]): Promise<string | null> {
+    const service = this.d.screenshots;
+    if (!service) return null;
+    this.d.activity?.record(taskId, "system", "Screenshots", null);
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const result = await Promise.race([
+        service.capture(taskId, input),
+        new Promise<never>((_, fail) => (timer = setTimeout(() => fail(new Error("screenshots took too long")), SCREENSHOT_LIMIT_MS))),
+      ]);
+      if (result.saved.length > 0) this.d.tasks.note(taskId, "screenshots_taken", result.summary);
+      return result.summary;
+    } catch (err) {
+      this.log(`task ${taskId}: screenshots failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.d.tasks.note(taskId, "screenshots_failed", "לא הצלחתי לצלם את התוצר");
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Lists the owner's attached files for the agent's prompt. Paths only; the agent opens them with Read. */

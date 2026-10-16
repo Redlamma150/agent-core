@@ -6,6 +6,7 @@ import { InnerBar, Soon, StatusPill, Stepper } from "../ui";
 import { useUndo } from "../undo";
 import { errorText, State } from "./common";
 import { TaskGallery } from "./media";
+import { PreviewFrame, useShots } from "./Preview";
 
 interface ActivityRow { id: number; agent: string; tool: string; target: string | null; created_at: string }
 interface StepRow { id: number; agent: string; status: string; from_status: string | null; to_status: string | null; summary: string | null; created_at: string }
@@ -37,6 +38,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
   const connected = useConnected();
   const [tab, setTab] = useState<TabKey>("overview");
   const [editing, setEditing] = useState(false);
+  const { shots } = useShots(t.id);
 
   /** Runs one action on the task and refreshes; the core answers 409 when the state no longer fits. */
   const act: Act = async (path, method = "POST", body = {}) => {
@@ -133,12 +135,17 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
         </>
       )}
 
-      {tab === "preview" && (
-        <div className="card center soon">
+      {tab === "preview" && (shots.size > 0 ? (
+        <>
+          <PreviewFrame taskId={t.id} shots={shots} />
+          <div className="muted">הצילומים נוצרים אוטומטית אחרי כל בנייה, בגודל נייד ובגודל מחשב.</div>
+        </>
+      ) : (
+        <div className="card center">
           <div className="ttl">עוד אין צילומים</div>
-          <div className="muted">צילומי לפני ואחרי יופיעו כאן כשהמערכת תתחיל לצלם את התוצר אחרי כל בנייה. מה שכבר נוצר נמצא בגלריה. <span className="soon-tag">בקרוב</span></div>
+          <div className="muted">הצילומים יופיעו כאן כשהבנייה תסתיים. הם נוצרים רק לעמודי HTML סטטיים. מה שכבר נוצר נמצא בגלריה.</div>
         </div>
-      )}
+      ))}
 
       {tab === "gallery" && <TaskGallery taskId={t.id} editable={!trashed && t.status !== "merged"} />}
 

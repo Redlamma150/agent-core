@@ -21,6 +21,7 @@ export function openDb(path: string): Db {
   ensureColumn(db, "tasks", "deleted_at", "TEXT");
   ensureColumn(db, "tasks", "token_extra", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "projects", "test_command", "TEXT");
+  ensureColumn(db, "attachments", "kind", "TEXT NOT NULL DEFAULT 'upload'"); // M16: 'screenshot' for pictures the core took itself
   return db;
 }
 

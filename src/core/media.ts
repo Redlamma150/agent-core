@@ -36,6 +36,8 @@ export interface Attachment {
   name: string;
   mime: string;
   size: number;
+  /** "upload" for files the owner attached, "screenshot" for pictures the core took of the result. */
+  kind: "upload" | "screenshot";
   created_at: string;
 }
 
@@ -73,7 +75,7 @@ export class MediaService {
   }
 
   list(taskId: number): Attachment[] {
-    return this.db.prepare("SELECT id, task_id, name, mime, size, created_at FROM attachments WHERE task_id = ? ORDER BY id").all(taskId) as Attachment[];
+    return this.db.prepare("SELECT id, task_id, name, mime, size, kind, created_at FROM attachments WHERE task_id = ? ORDER BY id").all(taskId) as Attachment[];
   }
 
   save(taskId: number, rawName: string, mime: string, data: Buffer): Attachment {
@@ -82,7 +84,7 @@ export class MediaService {
     if (data.length === 0) throw new MediaError("הקובץ ריק.");
     if (data.length > MAX_FILE_BYTES) throw new MediaError("הקובץ גדול מדי (עד 15MB).");
     if (!matchesContent(mime, data)) throw new MediaError("תוכן הקובץ לא תואם לסוג שלו.");
-    if (this.list(taskId).length >= MAX_FILES_PER_TASK) throw new MediaError(`אפשר לצרף עד ${MAX_FILES_PER_TASK} קבצים למשימה.`);
+    if (this.list(taskId).filter((a) => a.kind === "upload").length >= MAX_FILES_PER_TASK) throw new MediaError(`אפשר לצרף עד ${MAX_FILES_PER_TASK} קבצים למשימה.`);
 
     const name = safeName(rawName, mime);
     const dir = this.taskDir(taskId);
@@ -92,7 +94,27 @@ export class MediaService {
     const path = join(dir, `${id}-${name}`);
     writeFileSync(path, data);
     this.db.prepare("UPDATE attachments SET path = ? WHERE id = ?").run(path, id);
-    return { id, task_id: taskId, name, mime, size: data.length, created_at: new Date().toISOString() };
+    return { id, task_id: taskId, name, mime, size: data.length, kind: "upload", created_at: new Date().toISOString() };
+  }
+
+  /** A picture the core took of the task's result. Not counted against the owner's file limit and not shown to the agents. */
+  saveScreenshot(taskId: number, name: string, data: Buffer): Attachment {
+    if (!matchesContent("image/png", data)) throw new MediaError("הצילום אינו קובץ PNG תקין.");
+    const dir = this.taskDir(taskId);
+    mkdirSync(dir, { recursive: true });
+    const info = this.db.prepare("INSERT INTO attachments (task_id, name, mime, size, path, kind) VALUES (?, ?, 'image/png', ?, '', 'screenshot')").run(taskId, name, data.length);
+    const id = Number(info.lastInsertRowid);
+    const path = join(dir, `${id}-${name}`);
+    writeFileSync(path, data);
+    this.db.prepare("UPDATE attachments SET path = ? WHERE id = ?").run(path, id);
+    return { id, task_id: taskId, name, mime: "image/png", size: data.length, kind: "screenshot", created_at: new Date().toISOString() };
+  }
+
+  /** Clears the earlier screenshots of a task before new ones are taken (after a rejection and a rebuild). */
+  removeScreenshots(taskId: number): void {
+    const rows = this.db.prepare("SELECT id, path FROM attachments WHERE task_id = ? AND kind = 'screenshot'").all(taskId) as { id: number; path: string }[];
+    for (const r of rows) rmSync(r.path, { force: true });
+    this.db.prepare("DELETE FROM attachments WHERE task_id = ? AND kind = 'screenshot'").run(taskId);
   }
 
   /** Path and type of one attachment, for serving it back to the owner. */
@@ -110,6 +132,6 @@ export class MediaService {
 
   /** Absolute paths of a task's files, for the agent's prompt. */
   paths(taskId: number): { path: string; name: string; mime: string }[] {
-    return this.db.prepare("SELECT path, name, mime FROM attachments WHERE task_id = ? ORDER BY id").all(taskId) as { path: string; name: string; mime: string }[];
+    return this.db.prepare("SELECT path, name, mime FROM attachments WHERE task_id = ? AND kind = 'upload' ORDER BY id").all(taskId) as { path: string; name: string; mime: string }[];
   }
 }

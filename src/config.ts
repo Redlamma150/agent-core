@@ -34,6 +34,10 @@ const schema = z.object({
   /** Longest a single task may run before it is parked as blocked, so one stuck task cannot hold up the queue. */
   TASK_TIMEOUT_MINUTES: positiveInt("TASK_TIMEOUT_MINUTES").default(45),
   STATIC_DIR: required("STATIC_DIR").default("./app/dist"),
+  /** Take before and after screenshots of the page a task changed, for the approval screen. */
+  SCREENSHOTS: z.enum(["true", "false"], { error: "Env var SCREENSHOTS must be true or false" }).default("true"),
+  /** Chrome or Chromium executable for the screenshots. Empty: the installed Google Chrome is used. */
+  BROWSER_PATH: z.string().optional(),
   /** Keep the Mac from going to sleep while the core runs (macOS only), so the phone can always reach it. */
   KEEP_AWAKE: z.enum(["true", "false"], { error: "Env var KEEP_AWAKE must be true or false" }).default("true"),
 });
