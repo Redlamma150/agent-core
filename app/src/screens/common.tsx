@@ -1,16 +1,17 @@
 import type { ReactNode } from "react";
 import { ApiError } from "../lib/api";
-import { relativeTime, statusLabel, taskTitle, type TaskRow } from "../lib/format";
+import { relativeTime, taskTitle, type TaskRow } from "../lib/format";
 import type { Loaded } from "../hooks";
+import { Skeleton, StatusPill } from "../ui";
 
-export function State<T>({ q, children }: { q: Loaded<T>; children: (data: T) => ReactNode }) {
+export function State<T>({ q, children, skeletons = 2 }: { q: Loaded<T>; children: (data: T) => ReactNode; skeletons?: number }) {
   if (q.data !== null) return <>{children(q.data)}</>;
-  if (q.loading) return <p className="muted">טוען…</p>;
-  if (q.error instanceof ApiError && q.error.status === 501) return <p className="muted">התכונה הזאת עדיין לא מחוברת בליבה.</p>;
+  if (q.loading) return <Skeleton count={skeletons} />;
+  if (q.error instanceof ApiError && q.error.status === 501) return <div className="card"><p className="muted">התכונה הזאת עדיין לא מחוברת בליבה.</p></div>;
   return (
     <div className="card">
       <p>לא הצלחתי לטעון את הנתונים.</p>
-      <button onClick={q.reload}>נסה שוב</button>
+      <button type="button" className="btn" onClick={q.reload}>נסה שוב</button>
     </div>
   );
 }
@@ -30,27 +31,35 @@ export function errorText(err: unknown): string {
   return "משהו השתבש. נסה שוב.";
 }
 
-
-export function StatusChip({ status }: { status: string }) {
-  return <span className={`status s-${status}`}>{statusLabel(status)}</span>;
+/** The core's own Hebrew message when it sent one (for example why a merge failed). */
+export function coreMessage(err: unknown): string | null {
+  if (err instanceof ApiError) {
+    const body = err.body as { message?: string } | null;
+    if (body?.message) return body.message;
+  }
+  return null;
 }
 
-/** One task in a list: title first, then where it stands and, when it stopped, why. */
+/** What a task card says under the title: why it stopped, or that it needs the owner. */
+export function taskReason(t: TaskRow): string | null {
+  if (t.status === "blocked") return t.reason ?? "הסוכן לא הצליח להמשיך.";
+  if (t.status === "awaiting_approval") return "הסוכן סיים, צריך את האישור שלך";
+  if (t.status === "stopped") return t.reason;
+  return null;
+}
+
+/** One task in a list. The whole card is the tap target. */
 export function TaskCard({ t, now, queue }: { t: TaskRow; now: number; queue?: number }) {
-  const attention = t.status === "awaiting_approval" ? "needs" : t.status === "blocked" ? "blocked" : "";
+  const reason = taskReason(t);
   return (
-    <a className={`card task ${attention}`} href={`#/tasks/${t.id}`}>
+    <a className="card" href={`#/tasks/${t.id}`}>
       <div className="row between">
-        <span className="pill">{t.project_name}</span>
-        <StatusChip status={t.status} />
+        <StatusPill status={t.status} />
+        <span className="muted">{queue ? `מקום ${queue} בתור · ` : ""}{relativeTime(t.updated_at, now)}</span>
       </div>
-      <span className="title">{taskTitle(t)}</span>
-      {t.status === "blocked" && t.reason && <span className="reason">{t.reason}</span>}
-      {t.status === "awaiting_approval" && <span className="reason">הסוכן סיים. צריך את האישור שלך.</span>}
-      <span className="muted small">
-        {queue ? `בתור, מקום ${queue} · ` : ""}
-        {relativeTime(t.updated_at, now)}
-      </span>
+      <div className="ttl clamp2">{taskTitle(t)}</div>
+      {reason && <div className="reason clamp2">{reason}</div>}
+      <div className="row wrap"><span className="muted"><bdi>{t.project_name}</bdi> · <span className="mono">#{t.id}</span></span></div>
     </a>
   );
 }

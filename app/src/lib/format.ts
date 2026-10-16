@@ -1,5 +1,5 @@
 export const STATUS_LABELS: Record<string, string> = {
-  received: "התקבלה",
+  received: "בתור",
   planning: "בתכנון",
   in_progress: "בביצוע",
   awaiting_approval: "ממתינה לאישור",
@@ -9,6 +9,13 @@ export const STATUS_LABELS: Record<string, string> = {
 };
 
 export const statusLabel = (s: string) => STATUS_LABELS[s] ?? s;
+
+/** Pill colour class per status. Every pill also carries its label, so colour never carries the meaning alone. */
+const PILL: Record<string, string> = {
+  received: "p-queue", planning: "p-run", in_progress: "p-run", awaiting_approval: "p-wait",
+  blocked: "p-block", merged: "p-done", stopped: "p-pause",
+};
+export const pillClass = (s: string) => PILL[s] ?? "p-queue";
 
 /** SQLite stores UTC as "YYYY-MM-DD HH:MM:SS"; approvals store ISO strings. Both parse here. */
 export function parseDbDate(value: string): Date {

@@ -1,43 +1,51 @@
 import { useEffect, useState } from "react";
 import { disablePush, enablePush, pushEnabled, pushSupported } from "../lib/push";
+import { InnerBar, Toggle } from "../ui";
+import { useUndo } from "../undo";
 
+/** Gemini is off and hidden by default, and stays out of every other screen. It has no switch here until the core supports it. */
 export function SettingsScreen({ onLogout }: { onLogout: () => void }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { notify } = useUndo();
 
   useEffect(() => {
     void pushEnabled().then(setEnabled, () => setEnabled(false));
   }, []);
 
   async function toggle() {
-    setError(null);
     try {
       if (enabled) await disablePush();
       else await enablePush();
       setEnabled(await pushEnabled());
     } catch (err) {
-      setError((err as Error).message === "denied" ? "ההרשאה להתראות נדחתה. אפשר לשנות אותה בהגדרות המכשיר." : "לא הצלחתי לעדכן את ההתראות.");
+      notify((err as Error).message === "denied" ? "ההרשאה להתראות נדחתה. אפשר לשנות אותה בהגדרות המכשיר." : "לא הצלחתי לעדכן את ההתראות.");
     }
   }
 
   return (
     <>
-      <h2>הגדרות</h2>
-      <div className="card">
-        <h3>התראות</h3>
-        {!pushSupported() ? (
-          <p className="muted">המכשיר לא תומך בהתראות. באייפון צריך קודם להוסיף את האפליקציה למסך הבית.</p>
-        ) : (
-          <>
-            <p>{enabled ? "ההתראות פעילות במכשיר הזה." : "ההתראות כבויות במכשיר הזה."}</p>
-            <button className="primary" onClick={toggle} disabled={enabled === null}>{enabled ? "כבה התראות" : "הפעל התראות"}</button>
-          </>
-        )}
-        {error && <p className="error" role="alert">{error}</p>}
-      </div>
-      <div className="card">
-        <h3>חשבון</h3>
-        <button className="danger" onClick={onLogout}>התנתק ומחק טוקן מהמכשיר</button>
+      <InnerBar fallback="/tasks" />
+      <div className="body">
+        <h1 className="h1s">הגדרות</h1>
+
+        <h2 className="h2">ספקי AI</h2>
+        <div className="card" style={{ gap: 12 }}>
+          <div className="row between"><div><div className="ttl">Claude</div><div className="muted">מחובר דרך המנוי במחשב</div></div><span className="pill p-done">מחובר</span></div>
+          <div className="row between"><div><div className="ttl">GPT</div><div className="muted">לחוות דעת שנייה על קוד</div></div><span className="soon-tag">בקרוב</span></div>
+        </div>
+
+        <h2 className="h2">התראות ואוטומציה</h2>
+        <div className="card" style={{ gap: 14 }}>
+          {pushSupported()
+            ? <Toggle label="התראות במכשיר הזה" sub="בקשת אישור חדשה, משימה שנתקעה, נעצרה או מוזגה" checked={enabled === true} onChange={enabled === null ? undefined : toggle} />
+            : <div className="muted">המכשיר לא תומך בהתראות. באייפון צריך קודם להוסיף את האפליקציה למסך הבית.</div>}
+          <Toggle label="סיכום יומי" sub="הודעה אחת בסוף היום" checked={false} soon />
+          <Toggle label="המשך אוטומטי אחרי מכסה" sub="משימה שהושהתה תמשיך כשהמכסה מתחדשת" checked={false} soon />
+          <Toggle label="שמור שינויים בצד לפני מיזוג" sub="כך שינויים שלא נשמרו לא יעצרו מיזוג" checked={false} soon />
+          <Toggle label="עצור משימה שתקועה 45 דקות" sub="כבר פעיל תמיד. ניתן להגדרה בקובץ ההגדרות של הליבה" checked={true} soon />
+        </div>
+
+        <button type="button" className="btn dan" onClick={onLogout}>התנתק ומחק טוקן מהמכשיר</button>
       </div>
     </>
   );

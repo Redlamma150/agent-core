@@ -1,87 +1,82 @@
 import { useState } from "react";
-import { useApi } from "../hooks";
+import { useApi, useConnected } from "../hooks";
 import { api } from "../lib/api";
 import type { TaskRow } from "../lib/format";
+import { TopBar } from "../ui";
+import { useUndo } from "../undo";
 import { errorText, State } from "./common";
 
 /** Adds a project without the terminal: the computer shows its own folder dialog and the chosen folder is registered. */
 function AddProject({ onAdded }: { onAdded: () => void }) {
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const { notify } = useUndo();
   async function add() {
     setBusy(true);
-    setMsg(null);
     try {
       const { path } = await api<{ path: string | null }>("/projects/pick", { method: "POST", body: {} });
       if (path) {
         const res = await api<{ warnings: string[] }>("/projects", { method: "POST", body: { path } });
-        setMsg(res.warnings.length > 0 ? res.warnings.join(". ") : "הפרויקט נוסף ✓");
+        notify(res.warnings.length > 0 ? res.warnings.join(". ") : "הפרויקט נוסף");
         onAdded();
       }
     } catch (err) {
-      setMsg(errorText(err));
+      notify(errorText(err));
     } finally {
       setBusy(false);
     }
   }
   return (
     <div className="card">
-      <button className="primary" disabled={busy} onClick={add}>{busy ? "בחר תיקייה בחלון שנפתח במחשב…" : "＋ הוסף פרויקט מהמחשב"}</button>
-      <span className="muted small">נפתח חלון בחירת תיקייה במחשב. התיקייה צריכה להיות ריפו של git. זמין רק כשמשתמשים באפליקציה מהמחשב עצמו.</span>
-      {msg && <p className={msg.endsWith("✓") ? "muted" : "error"} role="status">{msg}</p>}
+      <button type="button" className="btn dark" disabled={busy} onClick={add}>{busy ? "בחר תיקייה בחלון שנפתח במחשב…" : "הוסף פרויקט מהמחשב"}</button>
+      <span className="muted">הוספת פרויקט זמינה מהמחשב בלבד. התיקייה צריכה להיות ריפו של git.</span>
     </div>
   );
 }
 
 function OpenButtons({ id }: { id: number }) {
-  const [msg, setMsg] = useState<string | null>(null);
+  const { notify } = useUndo();
   async function open(target: "folder" | "editor") {
-    setMsg(null);
     try {
       await api(`/projects/${id}/open`, { method: "POST", body: { target } });
     } catch (err) {
-      setMsg(errorText(err));
+      notify(errorText(err));
     }
   }
   return (
-    <>
-      <div className="actions">
-        <button onClick={() => open("folder")}>פתח תיקייה</button>
-        <button onClick={() => open("editor")}>פתח בעורך</button>
-      </div>
-      {msg && <p className="error" role="alert">{msg}</p>}
-    </>
+    <div className="row">
+      <button type="button" className="btn sm grow" onClick={() => open("folder")}>פתח תיקייה</button>
+      <button type="button" className="btn sm grow" onClick={() => open("editor")}>פתח בעורך</button>
+    </div>
   );
 }
 
 export function ProjectsScreen() {
   const projects = useApi<{ id: number; name: string; repo_path: string }[]>("/projects");
   const tasks = useApi<TaskRow[]>("/tasks?view=active");
+  const connected = useConnected();
   return (
     <>
-      <h2>פרויקטים</h2>
-      <AddProject onAdded={projects.reload} />
-      <State q={projects}>
-        {(list) => list.length === 0 ? <p className="muted">אין פרויקטים רשומים.</p> : (
-          <ul className="list">
-            {list.map((p) => {
-              const mine = (tasks.data ?? []).filter((t) => t.project_id === p.id);
-              const open = mine.filter((t) => !["merged", "stopped"].includes(t.status)).length;
-              return (
-                <li key={p.id} className="card">
-                  <div className="row between">
-                    <strong>{p.name}</strong>
-                    <span className="muted small">{open > 0 ? `${open} משימות פתוחות` : "אין משימות פתוחות"}</span>
-                  </div>
-                  <p className="muted small path"><bdi>{p.repo_path}</bdi></p>
-                  <a className="pill" href={`#/new?project=${p.id}`}>+ משימה חדשה בפרויקט</a>
-                  <OpenButtons id={p.id} />
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </State>
+      <TopBar title="פרויקטים" />
+      <div className="body has-nav">
+        <State q={projects}>
+          {(list) => list.length === 0 ? <div className="card"><div className="muted">אין פרויקטים רשומים</div></div> : list.map((p) => {
+            const open = (tasks.data ?? []).filter((t) => t.project_id === p.id && !["merged", "stopped"].includes(t.status)).length;
+            return (
+              <div key={p.id} className="card">
+                <div className="row between"><span className="ttl mono" style={{ fontSize: 15 }}>{p.name}</span><span className="muted">{open} פתוחות</span></div>
+                <div className="muted path"><bdi className="mono">{p.repo_path}</bdi></div>
+                <div className="row">
+                  <a className="btn sm grow" href={`#/new?project=${p.id}`}>משימה חדשה</a>
+                  <button type="button" className="btn sm grow soon" disabled>תצוגה חיה</button>
+                  <a className="btn sm grow" aria-disabled={!connected} href={`#/chat?q=${encodeURIComponent(`הצע לי שיפורי עיצוב לפרויקט ${p.name}`)}`}>הצע עיצוב</a>
+                </div>
+                <OpenButtons id={p.id} />
+              </div>
+            );
+          })}
+        </State>
+        <AddProject onAdded={projects.reload} />
+      </div>
     </>
   );
 }
