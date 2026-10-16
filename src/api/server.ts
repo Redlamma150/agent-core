@@ -60,18 +60,30 @@ export function buildApp({ db, accessToken, tasks, approvals, driver, activity, 
  * Fastify cannot listen on several hosts from one instance, so each bind address gets its own instance
  * sharing the same database and event bus. Never binds to anything outside `hosts`.
  */
-export async function startServers(deps: ApiDeps, hosts: string[], port: number): Promise<FastifyInstance[]> {
+export async function startServers(deps: ApiDeps, hosts: string[], port: number, warn: (line: string) => void = console.warn): Promise<FastifyInstance[]> {
   const bus = deps.bus ?? new EventBus();
   const apps: FastifyInstance[] = [];
+  const skipped: string[] = [];
   try {
     for (const host of hosts) {
       const app = buildApp({ ...deps, bus });
-      await app.listen({ host, port });
+      try {
+        await app.listen({ host, port });
+      } catch (err) {
+        // The Tailscale address does not exist while Tailscale is off. That must not take the whole core down:
+        // keep serving on the other addresses (normally 127.0.0.1) and say which one was skipped.
+        if ((err as NodeJS.ErrnoException).code !== "EADDRNOTAVAIL") throw err;
+        await app.close();
+        skipped.push(host);
+        continue;
+      }
       apps.push(app);
     }
+    if (apps.length === 0) throw new Error(`none of the addresses in API_BIND_HOSTS is available (${skipped.join(", ")})`);
   } catch (err) {
     await Promise.all(apps.map((a) => a.close()));
     throw err;
   }
+  for (const host of skipped) warn(`address ${host} is not available on this computer (is Tailscale running?): skipped, still listening on the others`);
   return apps;
 }

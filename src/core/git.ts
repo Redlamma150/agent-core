@@ -77,8 +77,13 @@ export class GitService {
     const git = simpleGit(repoPath);
     const branch = `task-${taskId}`;
     const current = (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
-    if (current !== base) throw new MergeError(`the project checkout is on "${current}", expected "${base}"`);
-    if (!(await git.status()).isClean()) throw new MergeError("the project checkout has uncommitted changes");
+    // These messages go straight to the owner in the app, so they are in Hebrew and say what to do.
+    if (current !== base) throw new MergeError(`תיקיית הפרויקט פתוחה כרגע על הענף "${current}" ולא על "${base}". עבור ל-${base} ונסה לאשר שוב.`);
+    // Only changes to tracked files block a merge. Untracked files (.DS_Store, notes) are harmless: if one of them
+    // would be overwritten by the task, git itself refuses the merge below and it is aborted cleanly.
+    if ((await git.raw(["status", "--porcelain", "--untracked-files=no"])).trim() !== "") {
+      throw new MergeError("יש בתיקיית הפרויקט שינויים בקבצים שלא נשמרו (commit). שמור אותם או בטל אותם ונסה לאשר שוב.");
+    }
     let failure: string | null = null;
     try {
       await git.raw([...IDENTITY, "merge", "--no-ff", branch, "-m", `Merge ${branch}`]);
@@ -89,7 +94,7 @@ export class GitService {
     if (failure === null && (await git.status()).conflicted.length > 0) failure = "conflicting changes";
     if (failure !== null) {
       await git.raw(["merge", "--abort"]).catch(() => undefined);
-      throw new MergeError(`merge conflict or failure: ${failure}`);
+      throw new MergeError(`המיזוג נכשל (${failure}). ייתכן שהשינויים מתנגשים עם שינויים שעשית בפרויקט.`);
     }
     await this.cleanup(repoPath, taskId);
   }

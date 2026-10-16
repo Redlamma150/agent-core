@@ -72,6 +72,20 @@ describe("GitService", () => {
     }
   });
 
+  it("ignores untracked files such as .DS_Store, and still refuses when one would be overwritten", async () => {
+    const { repo, git } = await makeRepo();
+    const p = await git.prepare(repo, 6);
+    writeFileSync(join(p.worktree, "new.txt"), "from task\n");
+    await git.commitAll(p.worktree, "add new");
+    writeFileSync(join(repo, ".DS_Store"), "junk");
+    writeFileSync(join(repo, "new.txt"), "owner's own untracked file\n"); // same name as the task's new file
+    await expect(git.merge(repo, 6, "main")).rejects.toThrow(MergeError);
+    expect(readFileSync(join(repo, "new.txt"), "utf8")).toBe("owner's own untracked file\n");
+    rmSync(join(repo, "new.txt"));
+    await git.merge(repo, 6, "main"); // only .DS_Store is untracked now: merge goes through
+    expect(readFileSync(join(repo, "new.txt"), "utf8")).toBe("from task\n");
+  });
+
   it("refuses to merge into a dirty or wrong checkout, and aborts conflicts cleanly", async () => {
     const { repo, git } = await makeRepo();
     const p = await git.prepare(repo, 5);
@@ -80,11 +94,11 @@ describe("GitService", () => {
 
     writeFileSync(join(repo, "scratch.txt"), "x");
     await simpleGit(repo).add("scratch.txt");
-    await expect(git.merge(repo, 5, "main")).rejects.toThrow(/uncommitted/);
+    await expect(git.merge(repo, 5, "main")).rejects.toThrow(/שינויים בקבצים שלא נשמרו/);
     await simpleGit(repo).raw(["reset", "-q"]);
     rmSync(join(repo, "scratch.txt"));
 
-    await expect(git.merge(repo, 5, "develop")).rejects.toThrow(/expected "develop"/);
+    await expect(git.merge(repo, 5, "develop")).rejects.toThrow(/ולא על "develop"/);
 
     // conflicting change on main
     writeFileSync(join(repo, "README.md"), "from main\n");
