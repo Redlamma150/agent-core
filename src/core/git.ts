@@ -15,6 +15,13 @@ const IDENTITY = ["-c", "user.name=agent-core", "-c", "user.email=agent-core@loc
 const SECRET_FILE = /(^|\/)(\.env(\..+)?|id_rsa|id_ed25519|[^/]+\.(pem|key|p12|pfx))$/;
 const isSecretFile = (path: string) => SECRET_FILE.test(path) && !/\.env\.(example|sample|template)$/.test(path);
 
+export interface FileChange {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  added: number;
+  removed: number;
+}
+
 export interface MergeOutcome {
   /** null: nothing was set aside. false: the owner's changes could not be put back on top of the merge and stay in `git stash`. */
   stashRestored: boolean | null;
@@ -78,6 +85,25 @@ export class GitService {
   async changedFiles(repoPath: string, base: string, branch: string): Promise<string[]> {
     const out = await simpleGit(repoPath).raw(["diff", "--name-only", `${base}...${branch}`]);
     return out.split("\n").filter(Boolean);
+  }
+
+  /** What changed on the task branch, per file: how (added, changed, deleted, renamed) and how many lines. No diff content. */
+  async changeSummary(repoPath: string, base: string, branch: string): Promise<FileChange[]> {
+    const git = simpleGit(repoPath);
+    const range = `${base}...${branch}`;
+    const [names, nums] = await Promise.all([git.raw(["diff", "--name-status", "-M", range]), git.raw(["diff", "--numstat", "-M", range])]);
+    const lines = new Map<string, { added: number; removed: number }>();
+    for (const row of nums.split("\n").filter(Boolean)) {
+      const [a, r, ...rest] = row.split("\t");
+      const path = rest.join("\t").replace(/^.*\{.* => (.*)\}(.*)$/, "$1$2").replace(/^.* => /, "");
+      lines.set(path, { added: a === "-" ? 0 : Number(a), removed: r === "-" ? 0 : Number(r) });
+    }
+    return names.split("\n").filter(Boolean).map((row) => {
+      const [code = "M", ...paths] = row.split("\t");
+      const path = paths[paths.length - 1] ?? "";
+      const status: FileChange["status"] = code.startsWith("A") ? "added" : code.startsWith("D") ? "deleted" : code.startsWith("R") ? "renamed" : "modified";
+      return { path, status, ...(lines.get(path) ?? { added: 0, removed: 0 }) };
+    });
   }
 
   /**

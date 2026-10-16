@@ -9,7 +9,7 @@ import type { ActivityService } from "./activity.js";
 import type { MediaService } from "./media.js";
 import type { Approval, ApprovalService } from "./approvals.js";
 import type { BudgetService } from "./budget.js";
-import { MergeError, SecretFileError, type GitService } from "./git.js";
+import { MergeError, SecretFileError, type FileChange, type GitService } from "./git.js";
 import type { ScreenshotService } from "./screenshots.js";
 import type { SettingsService } from "./settings.js";
 import { runTests } from "./verify.js";
@@ -281,6 +281,7 @@ export class Pipeline implements TaskDriver {
     const files = await git.changedFiles(project.repo_path, prepared.base, prepared.branch);
     if (files.length === 0) return void tasks.transition(task.id, "blocked", "הבונה סיים בלי לשנות שום קובץ", "הסוכן סיים בלי לשנות אף קובץ");
 
+    this.recordChanges(task.id, await git.changeSummary(project.repo_path, prepared.base, prepared.branch).catch(() => []));
     const tests = project.test_command ? await this.verify(task.id, project.test_command, prepared.worktree) : null;
 
     const lines = [`הבונה סיים את משימה #${task.id} בענף ${prepared.branch}\u200F.`, out.handoff.summary, `קבצים ששונו (${files.length}):\n${files.join("\n")}`];
@@ -323,6 +324,13 @@ export class Pipeline implements TaskDriver {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** Keeps the per file summary with the task, so the approval screen can show it (also after the branch is gone). */
+  private recordChanges(taskId: number, changes: FileChange[]): void {
+    if (changes.length === 0) return;
+    this.d.db.prepare("DELETE FROM steps WHERE task_id = ? AND status = 'files_changed'").run(taskId);
+    this.d.db.prepare("INSERT INTO steps (task_id, agent, status, summary, handoff) VALUES (?, 'system', 'files_changed', ?, ?)").run(taskId, `${changes.length} קבצים`, JSON.stringify(changes));
   }
 
   /** Lists the owner's attached files for the agent's prompt. Paths only; the agent opens them with Read. */

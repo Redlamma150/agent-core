@@ -156,6 +156,15 @@ describe("pipeline", () => {
     expect(t.tasks.get(t.task.id).status).toBe("awaiting_approval");
   });
 
+  it("keeps the per file change summary and the model used with the task", async () => {
+    const t = await setup();
+    t.pipeline.start(t.task.id);
+    await t.pipeline.idle();
+    const row = t.db.prepare("SELECT summary, handoff FROM steps WHERE task_id = ? AND status = 'files_changed'").get(t.task.id) as { summary: string; handoff: string };
+    expect(row.summary).toBe("1 קבצים");
+    expect(JSON.parse(row.handoff)).toEqual([{ path: "hello.txt", status: "added", added: 1, removed: 0 }]);
+  });
+
   it("approve with stash merges over the owner's unsaved changes and keeps them", async () => {
     const t = await setup();
     t.pipeline.start(t.task.id);

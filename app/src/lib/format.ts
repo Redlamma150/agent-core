@@ -43,6 +43,8 @@ export interface TaskRow {
   archived_at: string | null;
   deleted_at: string | null;
   reverted_at: string | null;
+  /** The model that did the work ("sonnet", "opus", "haiku"), or null before any agent ran. */
+  ai: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -81,6 +83,22 @@ export function activityLabel(tool: string): string {
     case "Tests": return "מריץ את בדיקות הפרויקט";
     case "Screenshots": return "מצלם את התוצר";
     default: return tool;
+  }
+}
+
+const MODEL_NAMES: Record<string, string> = { sonnet: "Claude Sonnet", opus: "Claude Opus", haiku: "Claude Haiku" };
+export const aiLabel = (model: string | null): string | null => (model ? (MODEL_NAMES[model] ?? `Claude ${model}`) : null);
+
+export interface FileChange { path: string; status: "added" | "modified" | "deleted" | "renamed"; added: number; removed: number }
+
+/** One file's change in plain words, no diff: how it changed and by how many lines. */
+export function describeChange(c: FileChange): string {
+  const lines = (n: number) => (n === 1 ? "שורה אחת" : `${n} שורות`);
+  switch (c.status) {
+    case "added": return c.added > 0 ? `נוסף · ${lines(c.added)}` : "נוסף";
+    case "deleted": return "נמחק";
+    case "renamed": return "שם הקובץ שונה";
+    default: return c.added + c.removed === 0 ? "שונה" : `שונה · נוספו ${c.added}, הוסרו ${c.removed}`;
   }
 }
 
