@@ -3,7 +3,7 @@ import { useApi, useConnected, useTick } from "../hooks";
 import { api, ApiError } from "../lib/api";
 import { relativeTime, STAGES, taskTitle, type TaskRow } from "../lib/format";
 import { Icon, InnerBar, Sheet, Soon, StatusPill, TopBar } from "../ui";
-import { useUndo } from "../undo";
+import { useUndo, type MergeFailure } from "../undo";
 import { coreMessage, errorText, State } from "./common";
 import { PreviewFrame, useShots } from "./Preview";
 
@@ -20,18 +20,21 @@ export interface ApprovalRow {
  * goes out only when the window ends. A failed merge (409) opens the approval screen with what to do next.
  */
 export function useApprove() {
-  const { schedule, setMergeError } = useUndo();
-  return (a: Pick<ApprovalRow, "id" | "task_id">) => {
+  const { schedule, setMergeError, notify } = useUndo();
+  return (a: Pick<ApprovalRow, "id" | "task_id">, opts: { stash?: boolean } = {}) => {
     setMergeError(a.id, null);
     schedule({
       text: `משימה #${a.task_id} אושרה ותמוזג`,
       task: { id: a.task_id, patch: { status: "merged" } },
       approvalId: a.id,
-      commit: () => api(`/approvals/${a.id}`, { method: "POST", body: { decision: "approve" } }),
+      commit: async () => {
+        const res = await api<{ warning?: string }>(`/approvals/${a.id}`, { method: "POST", body: { decision: "approve", stash: opts.stash } });
+        if (res?.warning) notify(res.warning);
+      },
       onError: (err) => {
         if (err instanceof ApiError && err.status === 409) {
           const message = coreMessage(err) ?? "המיזוג נכשל.";
-          setMergeError(a.id, message);
+          setMergeError(a.id, { message, reason: (err.body as { reason?: string } | null)?.reason ?? null });
           window.location.hash = `#/approvals/${a.id}`;
           return "המיזוג נכשל. אפשר לראות למה ומה לעשות.";
         }
@@ -95,14 +98,14 @@ export function ApprovalDetailScreen({ id }: { id: number }) {
               </div>
             );
           }
-          return <Detail a={a} mergeError={mergeErrors[id]} />;
+          return <Detail a={a} failure={mergeErrors[id]} />;
         }}
       </State>
     </>
   );
 }
 
-function Detail({ a, mergeError }: { a: ApprovalRow; mergeError: string | undefined }) {
+function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefined }) {
   const task = useApi<TaskRow>(`/tasks/${a.task_id}`);
   const approve = useApprove();
   const connected = useConnected();
@@ -110,8 +113,8 @@ function Detail({ a, mergeError }: { a: ApprovalRow; mergeError: string | undefi
   const [rejecting, setRejecting] = useState(false);
   const { shots } = useShots(a.task_id);
 
-  function approveAndLeave() {
-    approve(a);
+  function approveAndLeave(stash = false) {
+    approve(a, { stash });
     window.location.hash = "#/approvals";
   }
 
@@ -124,7 +127,7 @@ function Detail({ a, mergeError }: { a: ApprovalRow; mergeError: string | undefi
           {task.data && <div className="muted"><bdi>{task.data.project_name}</bdi></div>}
         </div>
 
-        {mergeError && <MergeFailed message={mergeError} approval={a} onRetry={approveAndLeave} />}
+        {failure && <MergeFailed failure={failure} approval={a} onRetry={() => approveAndLeave()} onStash={() => approveAndLeave(true)} />}
 
         <div className="card">
           <h2 className="h2">מה נעשה</h2>
@@ -145,7 +148,7 @@ function Detail({ a, mergeError }: { a: ApprovalRow; mergeError: string | undefi
         </div>
       </div>
       <div className="bar-fixed">
-        <button type="button" className="btn pri big" disabled={!connected} onClick={approveAndLeave}><Icon name="check" color="#fff" width={2.6} />אשר ומזג</button>
+        <button type="button" className="btn pri big" disabled={!connected} onClick={() => approveAndLeave()}><Icon name="check" color="#fff" width={2.6} />אשר ומזג</button>
         <button type="button" className="btn" disabled={!connected} onClick={() => setRejecting(true)}>דחה עם הערה</button>
       </div>
       {rejecting && (
@@ -168,19 +171,21 @@ function Detail({ a, mergeError }: { a: ApprovalRow; mergeError: string | undefi
 }
 
 /** A merge that failed: the reason in plain words, and the next step the owner can take. */
-function MergeFailed({ message, approval, onRetry }: { message: string; approval: ApprovalRow; onRetry: () => void }) {
+function MergeFailed({ failure, approval, onRetry, onStash }: { failure: MergeFailure; approval: ApprovalRow; onRetry: () => void; onStash: () => void }) {
   return (
     <>
       <div className="card">
         <h2 className="h2">למה המיזוג נכשל</h2>
-        <p className="txt pre">{message}</p>
+        <p className="txt pre">{failure.message}</p>
       </div>
       <div className="group">
         <h2 className="h2">מה לעשות</h2>
-        <div className="card strong soon" aria-disabled="true">
-          <div className="row"><span className="ttl">שמור אותם בצד ומזג</span><span className="ai rec">מומלץ</span><span className="soon-tag">בקרוב</span></div>
-          <div className="muted">השינויים שלך יישמרו בצד, המשימה תמוזג והם יחזרו למקום. עוד לא זמין בליבה.</div>
-        </div>
+        {failure.reason === "dirty" && (
+          <button type="button" className="card strong" onClick={onStash}>
+            <div className="row"><span className="ttl">שמור אותם בצד ומזג</span><span className="ai rec">מומלץ</span></div>
+            <div className="muted">השינויים שלך יישמרו בצד, המשימה תמוזג והם יחזרו למקום. לחיצה אחת.</div>
+          </button>
+        )}
         <button type="button" className="card" onClick={onRetry}><div className="ttl">נסה שוב</div><div className="muted">אחרי ששמרת את השינויים בפרויקט בעצמך</div></button>
         <a className="card" href={`#/chat?q=${encodeURIComponent(`המיזוג של משימה #${approval.task_id} נכשל. מה לעשות?`)}`}><div className="ttl">שאל את המתפעל</div><div className="muted">תסביר לו במילים מה לעשות</div></a>
       </div>

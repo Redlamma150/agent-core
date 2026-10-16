@@ -1,3 +1,4 @@
+import { MergeError } from "../src/core/git.js";
 import { networkInterfaces } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp, startServers } from "../src/api/server.js";
@@ -23,6 +24,8 @@ export function services(db: ReturnType<typeof openDb>, bus?: EventBus) {
       return copy;
     },
     resolveApproval: async (id: number, approve: boolean, note?: string) => approvals.resolve(id, approve, note),
+    revert: async (id: number) => tasks.setReverted(id, true),
+    unrevert: async (id: number) => tasks.setReverted(id, false),
     locate: (_id: number) => ({ path: "/r", kind: "project" as const, exists: true }),
   };
   return {
@@ -137,6 +140,44 @@ describe("task and approval routes", () => {
     expect(rejected.json()).toMatchObject({ status: "rejected", notes: "again" });
     expect((await post(app, `/approvals/${a.id}`, { decision: "approve" })).statusCode).toBe(409);
     expect((await post(app, "/approvals/999", { decision: "approve" })).statusCode).toBe(404);
+  });
+});
+
+describe("merge failures, stash and revert", () => {
+  const post = (app: ReturnType<typeof setup>["app"], url: string, payload: unknown) =>
+    app.inject({ method: "POST", url, headers: auth, payload: payload as object });
+
+  it("tells the app why a merge failed and passes the stash choice to the driver", async () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p', '/r')").run();
+    db.prepare("INSERT INTO tasks (project_id, description) VALUES (1, 'first')").run();
+    const base = services(db);
+    const seen: unknown[] = [];
+    const driver = {
+      ...base.driver,
+      resolveApproval: async (_id: number, _approve: boolean, _note?: string, opts?: { stash?: boolean }) => {
+        seen.push(opts);
+        if (!opts?.stash) throw new MergeError("יש שינויים שלא נשמרו", "dirty");
+        return { id: 1, warning: "kept" } as never;
+      },
+    };
+    const app = buildApp({ db, accessToken: TOKEN, ...base, driver });
+    const failed = await post(app, "/approvals/1", { decision: "approve" });
+    expect(failed.statusCode).toBe(409);
+    expect(failed.json()).toMatchObject({ error: "merge_failed", reason: "dirty", message: "יש שינויים שלא נשמרו" });
+    const ok = await post(app, "/approvals/1", { decision: "approve", stash: true });
+    expect(ok.json()).toMatchObject({ warning: "kept" });
+    expect(seen).toEqual([{ stash: undefined }, { stash: true }]);
+  });
+
+  it("reverts and unreverts a merged task through the API, and refuses other states", async () => {
+    const { db, app } = setup();
+    expect((await post(app, "/tasks/1/revert", {})).statusCode).toBe(409); // not merged yet
+    db.prepare("UPDATE tasks SET status = 'merged' WHERE id = 1").run();
+    const reverted = await post(app, "/tasks/1/revert", {});
+    expect(reverted.json()).toMatchObject({ status: "merged", reverted_at: expect.any(String) });
+    expect((await post(app, "/tasks/1/unrevert", {})).json().reverted_at).toBeNull();
+    expect((await post(app, "/tasks/abc/revert", {})).statusCode).toBe(400);
   });
 });
 

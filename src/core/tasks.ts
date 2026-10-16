@@ -49,12 +49,14 @@ export interface Task {
   title: string | null;
   archived_at: string | null;
   deleted_at: string | null;
+  /** Set while the task's merge has been undone with a revert commit (the task stays `merged`). */
+  reverted_at: string | null;
   token_extra: number;
   created_at: string;
   updated_at: string;
 }
 
-const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, token_extra, created_at, updated_at";
+const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, reverted_at, token_extra, created_at, updated_at";
 
 export class TaskService {
   constructor(private db: Db, private bus?: EventBus) {}
@@ -163,6 +165,15 @@ export class TaskService {
     const title = changes.title ?? (changes.description !== undefined ? titleOf(description) : task.title);
     this.db.prepare("UPDATE tasks SET description = ?, title = ?, updated_at = datetime('now') WHERE id = ?").run(description, title, id);
     this.note(id, "edited", "task text edited by owner");
+    return this.changed(id);
+  }
+
+  /** Marks a merged task as reverted, or clears the mark when the revert itself is undone. */
+  setReverted(id: number, reverted: boolean): Task {
+    const task = this.get(id);
+    if (task.status !== "merged") throw new InvalidActionError("only a merged task can be reverted");
+    this.db.prepare("UPDATE tasks SET reverted_at = ? WHERE id = ?").run(reverted ? new Date().toISOString().slice(0, 19).replace("T", " ") : null, id);
+    this.note(id, reverted ? "reverted" : "revert_undone", reverted ? "המיזוג הוחזר" : "המיזוג הוחזר למקומו");
     return this.changed(id);
   }
 

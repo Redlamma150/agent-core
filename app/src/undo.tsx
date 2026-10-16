@@ -22,9 +22,12 @@ interface UndoApi {
   applyTask: (t: TaskRow) => TaskRow;
   approvalHidden: (id: number) => boolean;
   /** Why the last merge of an approval failed, in the core's own words. Cleared when the owner tries again. */
-  mergeErrors: Record<number, string>;
-  setMergeError: (approvalId: number, message: string | null) => void;
+  mergeErrors: Record<number, MergeFailure>;
+  setMergeError: (approvalId: number, failure: MergeFailure | null) => void;
+  /** Something was done at once; the toast offers to take it back. */
+  offerUndo: (text: string, onUndo: () => Promise<unknown>) => void;
 }
+export interface MergeFailure { message: string; reason: string | null }
 const Ctx = createContext<UndoApi | null>(null);
 export const useUndo = (): UndoApi => {
   const v = useContext(Ctx);
@@ -34,8 +37,8 @@ export const useUndo = (): UndoApi => {
 
 export function UndoProvider({ children, low, onSettled }: { children: ReactNode; low: boolean; onSettled: () => void }) {
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [mergeErrors, setMergeErrors] = useState<Record<number, string>>({});
-  const [toast, setToast] = useState<{ text: string; undo: boolean } | null>(null);
+  const [mergeErrors, setMergeErrors] = useState<Record<number, MergeFailure>>({});
+  const [toast, setToast] = useState<{ text: string; undo: boolean; onUndo?: () => Promise<unknown> } | null>(null);
   const pending = useRef<Entry | null>(null);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -79,13 +82,28 @@ export function UndoProvider({ children, low, onSettled }: { children: ReactNode
     commitTimer.current = setTimeout(flush, UNDO_MS);
   }, [flush]);
 
+  /** For actions that already happened (a revert): the toast stays 5 seconds and "בטל" runs the opposite call. */
+  const offerUndo = useCallback((text: string, onUndo: () => Promise<unknown>) => {
+    flush();
+    clearTimeout(toastTimer.current);
+    setToast({ text, undo: true, onUndo });
+    toastTimer.current = setTimeout(() => setToast(null), UNDO_MS);
+  }, [flush]);
+
   const undo = useCallback(() => {
+    const reverse = toast?.onUndo;
+    if (reverse) {
+      clearTimeout(toastTimer.current);
+      setToast(null);
+      void reverse().then(() => settledRef.current(), (err) => notify(errorText(err)));
+      return;
+    }
     clearTimeout(commitTimer.current);
     const p = pending.current;
     pending.current = null;
     if (p) setEntries((e) => e.filter((x) => x.id !== p.id));
     setToast(null);
-  }, []);
+  }, [toast, notify]);
 
   // Closing the app inside the window is not an undo: the action goes out rather than being lost.
   useEffect(() => {
@@ -96,6 +114,7 @@ export function UndoProvider({ children, low, onSettled }: { children: ReactNode
   const api = useMemo<UndoApi>(() => ({
     schedule,
     notify,
+    offerUndo,
     applyTask: (t) => {
       let out = t;
       for (const e of entries) if (e.task?.id === t.id) out = { ...out, ...e.task.patch };
@@ -103,12 +122,12 @@ export function UndoProvider({ children, low, onSettled }: { children: ReactNode
     },
     approvalHidden: (id) => entries.some((e) => e.approvalId === id),
     mergeErrors,
-    setMergeError: (id, message) => setMergeErrors((m) => {
+    setMergeError: (id, failure) => setMergeErrors((m) => {
       const next = { ...m };
-      if (message === null) delete next[id]; else next[id] = message;
+      if (failure === null) delete next[id]; else next[id] = failure;
       return next;
     }),
-  }), [schedule, notify, entries, mergeErrors]);
+  }), [schedule, notify, offerUndo, entries, mergeErrors]);
 
   return (
     <Ctx.Provider value={api}>
