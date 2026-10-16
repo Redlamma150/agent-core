@@ -9,7 +9,8 @@ import { handoffJsonSchema, parseHandoff, type AgentRole, type Handoff } from ".
 export type QueryFn = (params: { prompt: string; options: Options }) => AsyncIterable<SDKMessage>;
 
 export interface RunRequest {
-  taskId: number;
+  /** The task this call belongs to. `null` for calls that belong to no task (the operator chat): handoffs then carry task_id "0". */
+  taskId: number | null;
   role: AgentRole;
   model: string;
   prompt: string;
@@ -21,6 +22,8 @@ export interface RunRequest {
    */
   tools?: string[];
   allowedTools?: string[];
+  /** In-process MCP servers (the operator's tools). Agents get none by default. */
+  mcpServers?: Options["mcpServers"];
   /** Extra folders the agent may read besides its working directory (the owner's attached files). */
   extraDirs?: string[];
   /** Settings files to load. Default none: cheaper, and the agent does not pick up personal settings. */
@@ -98,7 +101,7 @@ export class AgentRunner {
         // Agents get no MCP servers and none of the account's claude.ai connectors. Left on, the connectors were loaded
         // as soon as an agent used a tool and grew a 3.5K-token context to ~120K, and they are tools agents must not have.
         strictMcpConfig: true,
-        mcpServers: {},
+        mcpServers: req.mcpServers ?? {},
         settings: { disableClaudeAiConnectors: true },
         abortController: abort,
         // Agents run on the Claude subscription (never an API key) and see none of the core's secrets: see agentEnv.
@@ -106,7 +109,7 @@ export class AgentRunner {
       };
       for await (const message of this.queryFn({ prompt: req.prompt, options })) {
         if (message.type === "result") result = message;
-        else if (message.type === "assistant" && this.activity) {
+        else if (message.type === "assistant" && this.activity && req.taskId !== null) {
           for (const call of toolCallsOf(message, req.cwd)) this.activity.record(req.taskId, req.role, call.tool, call.target);
         }
       }
@@ -129,7 +132,7 @@ export class AgentRunner {
         outcome.ok ? 1 : 0,
         req.escalated ? 1 : 0,
       );
-    this.tasks.addTokens(req.taskId, tokens);
+    if (req.taskId !== null) this.tasks.addTokens(req.taskId, tokens);
     return outcome.ok ? { ok: true, handoff: outcome.handoff, tokens } : { ok: false, reason: outcome.reason, tokens };
   }
 
@@ -145,7 +148,7 @@ export class AgentRunner {
         return { ok: false as const, reason: "output is not valid JSON" };
       }
     }
-    const parsed = parseHandoff(raw, { taskId: req.taskId, role: req.role });
+    const parsed = parseHandoff(raw, { taskId: req.taskId ?? 0, role: req.role });
     return parsed.ok ? parsed : { ok: false as const, reason: `invalid handoff: ${parsed.error}` };
   }
 }

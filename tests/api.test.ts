@@ -88,7 +88,7 @@ describe("routes", () => {
   it.each([
     ["GET", "/projects/active", "M6"],
     ["POST", "/projects/active", "M6"],
-    ["POST", "/chat", "M5"],
+    ["POST", "/chat", "M11"],
   ] as const)("%s %s returns 501", async (method, url, milestone) => {
     const { app } = setup();
     const res = await app.inject({ method, url, headers: auth });

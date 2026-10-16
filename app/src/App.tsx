@@ -48,11 +48,12 @@ function Shell({ onLogout }: { onLogout: () => void }) {
       <header className="topbar">
         <h1>מערכת סוכנים</h1>
         <span className={connected ? "conn" : "conn off"} role="status"><i />{connected ? "חי" : "מנותק"}</span>
+        <a className="icon-btn" href="#/chat" aria-label="שיחה עם המתפעל">💬</a>
         <a className="icon-btn" href="#/settings" aria-label="הגדרות">⚙</a>
       </header>
       {!connected && <div className="banner">אין חיבור לליבה. מנסה להתחבר מחדש…</div>}
       <main>{screen(route, onLogout)}</main>
-      {!route.startsWith("/new") && !/^\/tasks\/\d+/.test(route) && <a className="fab" href="#/new"><span aria-hidden="true">＋</span> משימה חדשה</a>}
+      {!route.startsWith("/new") && !route.startsWith("/chat") && !/^\/tasks\/\d+/.test(route) && <a className="fab" href="#/new"><span aria-hidden="true">＋</span> משימה חדשה</a>}
       <nav className="tabbar" aria-label="ניווט ראשי">
         {TABS.map((t) => (
           <a key={t.path} href={`#${t.path}`} aria-current={route.startsWith(t.path) ? "page" : undefined}>

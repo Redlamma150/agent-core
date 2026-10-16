@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /** Roles that have a prompt template. */
-export type TemplateRole = "planner" | "builder";
+export type TemplateRole = "planner" | "builder" | "operator";
 
 export function loadTemplate(role: TemplateRole): string {
   return readFileSync(fileURLToPath(new URL(`./templates/${role}.md`, import.meta.url)), "utf8");
