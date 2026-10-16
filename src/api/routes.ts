@@ -11,6 +11,7 @@ import { LocalActionError, isLocalRequest, type LocalActions } from "../core/loc
 import { ALLOWED_MIME, MAX_FILE_BYTES, MediaError, type MediaService } from "../core/media.js";
 import { OperatorBusyError, OperatorFailedError, MAX_HISTORY, MAX_TEXT, type OperatorService } from "../core/operator.js";
 import { UnknownInsightError, type InsightService } from "../core/insights.js";
+import { nextNight } from "../core/scheduler.js";
 import { registerProject } from "../core/projects.js";
 import type { SettingsService } from "../core/settings.js";
 import { InvalidActionError, InvalidTransitionError, NotFoundError, type TaskService } from "../core/tasks.js";
@@ -19,7 +20,7 @@ const notImplemented = (reply: FastifyReply, milestone: string) =>
   reply.code(501).send({ error: "not_implemented", milestone });
 
 const TASK_COLUMNS =
-  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.created_at, t.updated_at";
+  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.scheduled_for, t.created_at, t.updated_at";
 const TASK_FROM = "FROM tasks t JOIN projects p ON p.id = t.project_id";
 /** Why a blocked or stopped task stopped: the summary of the step that moved it there. */
 /** The model that did the task's work: the builder's latest call, otherwise any latest call. Always a Claude model for now. */
@@ -31,13 +32,15 @@ const VIEWS: Record<string, string> = {
   trash: "t.deleted_at IS NOT NULL",
 };
 
-const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional() });
+const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional(), when: z.enum(["now", "night"]).optional() });
 const editTaskBody = z.object({ title: z.string().trim().min(1).max(80).optional(), description: z.string().trim().min(1).max(5000).optional() }).refine((b) => b.title !== undefined || b.description !== undefined, "nothing to change");
 const continueBody = z.object({ note: z.string().trim().max(5000).optional() });
 const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z.string().max(5000).optional(), stash: z.boolean().optional() });
 
 export interface Services {
   tasks: TaskService;
+  /** Local hour a "tonight" task starts. */
+  nightHour?: number;
   approvals: ApprovalService;
   driver: TaskDriver;
   activity?: ActivityService;
@@ -48,7 +51,7 @@ export interface Services {
   settings?: SettingsService;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings, nightHour = 2 }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message, reason: err.reason });
@@ -177,9 +180,11 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   app.post("/tasks", async (req, reply) => {
     const body = createTaskBody.parse(req.body);
     if (!db.prepare("SELECT 1 FROM projects WHERE id = ?").get(body.project_id)) return reply.code(404).send({ error: "project_not_found" });
-    const task = tasks.create(body.project_id, body.description, body.flagged);
+    const night = body.when === "night";
+    const task = tasks.create(body.project_id, body.description, body.flagged, night ? nextNight(new Date(), nightHour) : null);
     // `hold`: the app attaches files first and then starts the task, so the agent sees them from its first step.
-    if (!body.hold) driver.start(task.id);
+    // A night task is never started here: the scheduler starts it when its time comes.
+    if (!body.hold && !night) driver.start(task.id);
     return reply.code(201).send(task);
   });
   app.post<{ Params: { id: string } }>("/tasks/:id/start", async (req, reply) => {
@@ -187,6 +192,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
     if (id === null) return reply.code(400).send({ error: "invalid_id" });
     const task = tasks.get(id);
     if (task.status !== "received") throw new InvalidActionError(`task is already ${task.status}`);
+    tasks.clearSchedule(id); // starting by hand skips the wait
     driver.start(id);
     return oneTask(id);
   });
@@ -278,7 +284,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
       return insights.list();
     });
   }
-  app.get("/settings", async () => ({ auto_stash: settings?.autoStash() ?? false }));
+  app.get("/settings", async () => ({ auto_stash: settings?.autoStash() ?? false, night_hour: nightHour }));
   app.put("/settings", async (req, reply) => {
     if (!settings) return reply.code(501).send({ error: "not_implemented" });
     const body = z.object({ auto_stash: z.boolean().optional() }).parse(req.body);

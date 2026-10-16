@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useApi, useConnected, useTick } from "../hooks";
 import { api } from "../lib/api";
-import { activityLabel, formatDate, formatNumber, parseDbDate, RUNNING, relativeTime, STAGES, stageOf, stepLabel, taskTitle, type TaskRow } from "../lib/format";
+import { activityLabel, formatDate, formatNumber, parseDbDate, RUNNING, relativeTime, scheduleLabel, STAGES, stageOf, stepLabel, taskTitle, type TaskRow } from "../lib/format";
 import { AiBadge, InnerBar, Sheet, StatusPill, Stepper } from "../ui";
 import { useUndo } from "../undo";
 import { errorText, State } from "./common";
@@ -77,7 +77,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
 
   const approval = approvals.data?.find((a) => a.task_id === t.id);
   const stage = stageOf(t.status, (steps.data ?? []).map((s) => s.to_status));
-  const running = RUNNING.has(t.status) || t.status === "received";
+  const running = RUNNING.has(t.status) || (t.status === "received" && !t.scheduled_for);
   const trashed = t.deleted_at !== null;
   const canEdit = ["blocked", "stopped"].includes(t.status);
 
@@ -94,6 +94,14 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
         <div className="soft">
           <span>המשימה בפח. היא תימחק לצמיתות 30 יום אחרי המחיקה.</span>
           <button type="button" className="btn sm" disabled={!connected} onClick={() => act("/restore")}>שחזר</button>
+        </div>
+      )}
+
+      {!trashed && t.status === "received" && t.scheduled_for && (
+        <div className="card">
+          <div className="ttl">מתוזמנת: תתחיל {scheduleLabel(t.scheduled_for)}</div>
+          <p className="txt">המשימה מחכה לשעה שנקבעה. אפשר להתחיל אותה עכשיו, או לעצור אותה.</p>
+          <button type="button" className="btn pri" disabled={!connected} onClick={() => act("/start")}>התחל עכשיו</button>
         </div>
       )}
 
@@ -138,7 +146,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
 
       {tab === "overview" && (
         <>
-          {running && !trashed && <LiveLog rows={feed.data ?? []} queued={t.status === "received"} />}
+          {running && !trashed && <LiveLog rows={feed.data ?? []} queued={t.status === "received" && !t.scheduled_for} />}
           <div className="card">
             <div className="row between">
               <h2 className="h2">מה ביקשתי</h2>

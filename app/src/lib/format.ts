@@ -45,6 +45,8 @@ export interface TaskRow {
   reverted_at: string | null;
   /** The model that did the work ("sonnet", "opus", "haiku"), or null before any agent ran. */
   ai: string | null;
+  /** UTC time a scheduled task waits for; null when it is not waiting. */
+  scheduled_for: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -100,6 +102,13 @@ export function describeChange(c: FileChange): string {
     case "renamed": return "שם הקובץ שונה";
     default: return c.added + c.removed === 0 ? "שונה" : `שונה · נוספו ${c.added}, הוסרו ${c.removed}`;
   }
+}
+
+/** "02:00", or "מחר ב-02:00" when the time is not today. */
+export function scheduleLabel(value: string, now = new Date()): string {
+  const d = parseDbDate(value);
+  const time = d.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return d.toDateString() === now.toDateString() ? `היום ב-${time}` : `מחר ב-${time}`;
 }
 
 export const STAGES = ["תכנון", "בנייה", "אישור", "מוזגה"] as const;

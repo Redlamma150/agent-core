@@ -51,20 +51,25 @@ export interface Task {
   deleted_at: string | null;
   /** Set while the task's merge has been undone with a revert commit (the task stays `merged`). */
   reverted_at: string | null;
+  /** UTC time ("YYYY-MM-DD HH:MM:SS") a scheduled task is waiting for. Null once it starts. */
+  scheduled_for: string | null;
   token_extra: number;
   created_at: string;
   updated_at: string;
 }
 
-const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, reverted_at, token_extra, created_at, updated_at";
+/** SQLite's own UTC text format, which the rest of the schema uses. */
+export const sqliteTime = (d: Date): string => d.toISOString().slice(0, 19).replace("T", " ");
+
+const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, reverted_at, scheduled_for, token_extra, created_at, updated_at";
 
 export class TaskService {
   constructor(private db: Db, private bus?: EventBus) {}
 
-  create(projectId: number, description: string, flagged = false): Task {
+  create(projectId: number, description: string, flagged = false, scheduledFor: Date | null = null): Task {
     const info = this.db
-      .prepare("INSERT INTO tasks (project_id, description, flagged, title) VALUES (?, ?, ?, ?)")
-      .run(projectId, description, flagged ? 1 : 0, titleOf(description));
+      .prepare("INSERT INTO tasks (project_id, description, flagged, title, scheduled_for) VALUES (?, ?, ?, ?, ?)")
+      .run(projectId, description, flagged ? 1 : 0, titleOf(description), scheduledFor ? sqliteTime(scheduledFor) : null);
     const id = Number(info.lastInsertRowid);
     this.db.prepare("INSERT INTO steps (task_id, agent, status, to_status, summary) VALUES (?, 'system', 'done', 'received', 'task created')").run(id);
     const task = this.get(id);
@@ -115,8 +120,14 @@ export class TaskService {
   /** Tasks that were mid-flight and should be picked up again after a restart. */
   resumable(): Task[] {
     return this.db
-      .prepare(`SELECT ${TASK_COLS} FROM tasks WHERE status IN ('received','planning','in_progress') ORDER BY id`)
+      .prepare(`SELECT ${TASK_COLS} FROM tasks WHERE status IN ('received','planning','in_progress') AND scheduled_for IS NULL ORDER BY id`)
       .all() as Task[];
+  }
+
+  /** The owner starts a scheduled task now (or its time came): it no longer waits. */
+  clearSchedule(id: number): void {
+    this.db.prepare("UPDATE tasks SET scheduled_for = NULL WHERE id = ?").run(id);
+    this.changed(id);
   }
 
   setBranch(id: number, branch: string, base: string): void {

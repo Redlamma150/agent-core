@@ -32,7 +32,7 @@ export function TasksScreen() {
             // Open on the group that needs attention first; the owner can still pick another one.
             const current: GroupKey = group ?? (inGroup("needs").length > 0 ? "needs" : inGroup("active").length > 0 ? "active" : "done");
             const running = rows.find((t) => RUNNING.has(t.status));
-            const queue = rows.filter((t) => t.status === "received").sort((a, b) => a.id - b.id);
+            const queue = rows.filter((t) => t.status === "received" && !t.scheduled_for).sort((a, b) => a.id - b.id);
             const shown = inGroup(current);
             const tokens = usage.data ? usage.data.last_5h.input_tokens + usage.data.last_5h.output_tokens : null;
             return (
@@ -48,7 +48,7 @@ export function TasksScreen() {
                   ))}
                 </div>
                 <div className="list">
-                  {shown.map((t) => <TaskCard key={t.id} t={t} now={now} queue={t.status === "received" ? queue.indexOf(t) + 1 : undefined} />)}
+                  {shown.map((t) => <TaskCard key={t.id} t={t} now={now} queue={t.status === "received" && !t.scheduled_for ? queue.indexOf(t) + 1 : undefined} />)}
                   {shown.length === 0 && <div className="card"><div className="muted">אין כאן משימות כרגע</div></div>}
                 </div>
                 <div className="row" style={{ justifyContent: "center", gap: 18 }}>
