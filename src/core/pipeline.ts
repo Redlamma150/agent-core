@@ -87,7 +87,7 @@ export class Pipeline implements TaskDriver {
     try {
       const status = this.d.tasks.get(taskId).status;
       if (status === "received" || status === "planning" || status === "in_progress") {
-        this.d.tasks.transition(taskId, "blocked", `המשימה רצה יותר מ-${minutes} דקות ונעצרה. אפשר להמשיך אותה מאותו מקום.`);
+        this.d.tasks.transition(taskId, "blocked", `המשימה רצה יותר מ${minutes === 1 ? "דקה" : `-${minutes} דקות`} ונעצרה. אפשר להמשיך אותה מאותו מקום.`);
       }
     } catch {
       // the task vanished or changed under us: aborting below is still right
