@@ -23,6 +23,7 @@ export function services(db: ReturnType<typeof openDb>, bus?: EventBus) {
       return copy;
     },
     resolveApproval: async (id: number, approve: boolean, note?: string) => approvals.resolve(id, approve, note),
+    locate: (_id: number) => ({ path: "/r", kind: "project" as const, exists: true }),
   };
   return {
     tasks,

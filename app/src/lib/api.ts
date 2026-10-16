@@ -90,3 +90,43 @@ export async function streamEvents(onEvent: (e: SseEvent) => void, signal: Abort
     backoff = Math.min(backoff * 2, 15000);
   }
 }
+
+/** Uploads one file to a task. The core wants raw bytes, the file's own type and its name in the query. */
+export async function uploadFile(taskId: number, file: File): Promise<void> {
+  const token = tokenStore.get();
+  if (!token) throw new ApiError(401, null);
+  const res = await fetch(`/tasks/${taskId}/media?name=${encodeURIComponent(file.name)}`, {
+    method: "POST",
+    headers: headers(token, { "content-type": file.type || "application/octet-stream" }),
+    body: file,
+  });
+  if (res.status === 401) {
+    onUnauthorized();
+    throw new ApiError(401, null);
+  }
+  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => null));
+}
+
+/** An image tag cannot send the Authorization header, so attachments are fetched and shown from a blob URL. */
+export async function fetchBlobUrl(path: string): Promise<string> {
+  const token = tokenStore.get();
+  if (!token) throw new ApiError(401, null);
+  const res = await fetch(path, { headers: headers(token) });
+  if (!res.ok) throw new ApiError(res.status, null);
+  return URL.createObjectURL(await res.blob());
+}
+
+/**
+ * The launcher opens the app as `/#token=...` so there is nothing to type. The token is moved into storage
+ * and removed from the address bar (and from the history entry) right away.
+ */
+export function consumeTokenFromHash(): void {
+  const m = /^#token=([^&]+)/.exec(window.location.hash);
+  if (!m?.[1]) return;
+  try {
+    tokenStore.set(decodeURIComponent(m[1]));
+  } catch {
+    return; // storage unavailable: the login screen asks for the token instead
+  }
+  window.history.replaceState(null, "", `${window.location.pathname}#/tasks`);
+}

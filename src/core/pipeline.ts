@@ -6,6 +6,7 @@ import type { AgentRunner } from "../agents/runner.js";
 import { BUILDER_ALLOWED, BUILDER_TOOLS, loadTemplate, PLANNER_TOOLS } from "../agents/templates.js";
 import type { Db } from "../db/index.js";
 import type { ActivityService } from "./activity.js";
+import type { MediaService } from "./media.js";
 import type { Approval, ApprovalService } from "./approvals.js";
 import type { BudgetService } from "./budget.js";
 import { SecretFileError, type GitService } from "./git.js";
@@ -29,6 +30,8 @@ export interface TaskDriver {
   /** Starts a new task with the same project and text. */
   duplicate(taskId: number): Task;
   resolveApproval(approvalId: number, approve: boolean, note?: string): Promise<Approval>;
+  /** Where the task's work is on this computer: its worktree while it exists, otherwise the project folder. */
+  locate(taskId: number): { path: string; kind: "worktree" | "project"; exists: boolean };
 }
 
 const TERMINAL = new Set(["merged", "stopped"]);
@@ -39,15 +42,20 @@ const TERMINAL = new Set(["merged", "stopped"]);
  */
 export class Pipeline implements TaskDriver {
   private active = new Map<number, AbortController>();
+  /** Tasks queued but not started yet, so a second start (double tap) cannot run the same task twice. */
+  private waiting = new Set<number>();
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
-    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService },
+    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService; media?: MediaService },
     private log: (line: string) => void = console.log,
   ) {}
 
   start(taskId: number, notes?: string): void {
+    if (this.waiting.has(taskId)) return;
+    this.waiting.add(taskId);
     this.queue = this.queue.then(async () => {
+      this.waiting.delete(taskId);
       const abort = new AbortController();
       this.active.set(taskId, abort);
       try {
@@ -116,6 +124,13 @@ export class Pipeline implements TaskDriver {
     return resolved;
   }
 
+  locate(taskId: number): { path: string; kind: "worktree" | "project"; exists: boolean } {
+    const project = this.project(this.d.tasks.get(taskId));
+    const worktree = this.d.git.worktreePath(project.repo_path, taskId);
+    if (existsSync(worktree)) return { path: worktree, kind: "worktree", exists: true };
+    return { path: project.repo_path, kind: "project", exists: existsSync(project.repo_path) };
+  }
+
   // ---- internals -------------------------------------------------------------------------------------------------
 
   private async drive(taskId: number, signal: AbortSignal, notes?: string): Promise<void> {
@@ -140,8 +155,9 @@ export class Pipeline implements TaskDriver {
       taskId: task.id,
       role: "planner",
       systemPrompt: loadTemplate("planner"),
-      prompt: `Task ${task.id}: ${task.description}\n\nThe project "${project.name}" is your current directory. Plan this task.${notes ? `\n\nA note from the owner: ${notes}` : ""}${projectContext(project)}`,
+      prompt: `Task ${task.id}: ${task.description}\n\nThe project "${project.name}" is your current directory. Plan this task.${notes ? `\n\nA note from the owner: ${notes}` : ""}${projectContext(project)}${this.attachmentsNote(task.id)}`,
       cwd: project.repo_path,
+      extraDirs: this.attachmentDirs(task.id),
       tools: PLANNER_TOOLS,
       allowedTools: PLANNER_TOOLS,
       permissionMode: "dontAsk",
@@ -167,6 +183,8 @@ export class Pipeline implements TaskDriver {
     parts.push("Your current directory is the task's git worktree. Implement the task there.");
     const context = projectContext(project);
     if (context) parts.push(context.trim());
+    const attached = this.attachmentsNote(task.id).trim();
+    if (attached) parts.push(attached);
 
     const out = await executeAgent(this.d, {
       taskId: task.id,
@@ -174,6 +192,7 @@ export class Pipeline implements TaskDriver {
       systemPrompt: loadTemplate("builder"),
       prompt: parts.join("\n\n"),
       cwd: prepared.worktree,
+      extraDirs: this.attachmentDirs(task.id),
       tools: BUILDER_TOOLS,
       allowedTools: BUILDER_ALLOWED,
       permissionMode: "dontAsk",
@@ -206,6 +225,17 @@ export class Pipeline implements TaskDriver {
     const result = await runTests(command, cwd);
     this.d.tasks.note(taskId, result.passed ? "tests_passed" : "tests_failed", result.summary);
     return result.summary;
+  }
+
+  /** Lists the owner's attached files for the agent's prompt. Paths only; the agent opens them with Read. */
+  private attachmentsNote(taskId: number): string {
+    const files = this.d.media?.paths(taskId) ?? [];
+    if (files.length === 0) return "";
+    return `\n\nFiles attached by the owner (images, PDFs or text; open them with the Read tool and use them as reference, do not copy them into the repo unless the task asks for it):\n${files.map((f) => `- ${f.path} (${f.name})`).join("\n")}`;
+  }
+
+  private attachmentDirs(taskId: number): string[] | undefined {
+    return (this.d.media?.paths(taskId).length ?? 0) > 0 ? [this.d.media!.taskDir(taskId)] : undefined;
   }
 
   private project(task: Task): ProjectRow {
