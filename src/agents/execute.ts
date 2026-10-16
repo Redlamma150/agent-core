@@ -1,4 +1,5 @@
 import type { BudgetService } from "../core/budget.js";
+import type { SettingsService } from "../core/settings.js";
 import type { TaskService } from "../core/tasks.js";
 import type { Handoff } from "./contract.js";
 import { MIN_CONFIDENCE, route } from "./router.js";
@@ -23,10 +24,10 @@ export function shortReason(summary: string, max = 90): string {
  * Escalations and budget warnings are written to the task's step log.
  */
 export async function executeAgent(
-  deps: { tasks: TaskService; runner: AgentRunner; budget: BudgetService },
+  deps: { tasks: TaskService; runner: AgentRunner; budget: BudgetService; settings?: SettingsService },
   req: Omit<RunRequest, "model" | "escalated" | "taskId"> & { taskId: number },
 ): Promise<Outcome> {
-  const { tasks, runner, budget } = deps;
+  const { tasks, runner, budget, settings } = deps;
   const id = req.taskId;
   let lastConfidence: number | undefined;
 
@@ -36,7 +37,7 @@ export async function executeAgent(
     if (task.status === "stopped") return { kind: "stopped", reason: "stopped by owner" };
     if (task.status === "blocked") return { kind: "blocked", reasons: ["blocked while running (time limit)"] };
 
-    const decision = route({ role: req.role, consecutiveFailures: task.failures, escalations: task.escalations, flagged: task.flagged === 1, lastConfidence });
+    const decision = route({ role: req.role, consecutiveFailures: task.failures, escalations: task.escalations, flagged: task.flagged === 1, lastConfidence, modelOverride: settings?.roleModel(req.role) });
     if (decision.action === "block") {
       tasks.transition(id, "blocked", decision.reasons.join("; "), "הסוכן נכשל או לא היה בטוח בעצמו, גם אחרי הסלמה למודל החזק");
       return { kind: "blocked", reasons: decision.reasons };

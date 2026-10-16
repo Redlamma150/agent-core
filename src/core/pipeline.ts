@@ -11,6 +11,7 @@ import type { Approval, ApprovalService } from "./approvals.js";
 import type { BudgetService } from "./budget.js";
 import { MergeError, SecretFileError, type GitService } from "./git.js";
 import type { ScreenshotService } from "./screenshots.js";
+import type { SettingsService } from "./settings.js";
 import { runTests } from "./verify.js";
 import { InvalidActionError, type Task, type TaskService } from "./tasks.js";
 
@@ -53,7 +54,7 @@ export class Pipeline implements TaskDriver {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
-    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService; media?: MediaService; screenshots?: ScreenshotService; timeoutMs?: number },
+    private d: { db: Db; tasks: TaskService; approvals: ApprovalService; runner: AgentRunner; budget: BudgetService; git: GitService; activity?: ActivityService; media?: MediaService; screenshots?: ScreenshotService; settings?: SettingsService; timeoutMs?: number },
     private log: (line: string) => void = console.log,
   ) {}
 
@@ -151,7 +152,15 @@ export class Pipeline implements TaskDriver {
     let warning: string | undefined;
     if (approve && approval.status === "pending") {
       if (!task.base_branch) throw new Error(`task ${task.id} has no base branch recorded`);
-      const outcome = await git.merge(this.project(task).repo_path, task.id, task.base_branch, { stash: opts.stash });
+      const stash = opts.stash ?? this.d.settings?.autoStash() ?? false;
+      let outcome;
+      try {
+        outcome = await git.merge(this.project(task).repo_path, task.id, task.base_branch, { stash });
+      } catch (err) {
+        // Counted by the efficiency suggestions: the same block coming back is worth fixing for good.
+        if (err instanceof MergeError && err.reason === "dirty") tasks.note(task.id, "merge_failed_dirty", err.message);
+        throw err;
+      }
       if (outcome.stashRestored === false) {
         warning = "המשימה מוזגה, אבל השינויים שלא שמרת התנגשו איתה ולא הוחזרו. הם שמורים ב-git stash בפרויקט (git stash pop).";
         tasks.note(task.id, "stash_kept", warning);
