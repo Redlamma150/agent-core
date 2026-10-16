@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useApi, useConnected, useTick } from "../hooks";
 import { api } from "../lib/api";
 import { activityLabel, formatDate, formatNumber, parseDbDate, RUNNING, relativeTime, STAGES, stageOf, stepLabel, taskTitle, type TaskRow } from "../lib/format";
-import { InnerBar, Soon, StatusPill, Stepper } from "../ui";
+import { InnerBar, Sheet, StatusPill, Stepper } from "../ui";
 import { useUndo } from "../undo";
 import { errorText, State } from "./common";
 import { TaskGallery } from "./media";
@@ -29,7 +29,7 @@ export function TaskScreen({ id }: { id: number }) {
 const hhmm = (value: string) => parseDbDate(value).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false });
 
 function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
-  const { applyTask, schedule, notify } = useUndo();
+  const { applyTask, schedule, notify, offerUndo } = useUndo();
   const t = applyTask(base);
   const steps = useApi<StepRow[]>(`/tasks/${t.id}/steps`);
   const feed = useApi<ActivityRow[]>(`/tasks/${t.id}/activity`);
@@ -38,6 +38,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
   const connected = useConnected();
   const [tab, setTab] = useState<TabKey>("overview");
   const [editing, setEditing] = useState(false);
+  const [confirmRevert, setConfirmRevert] = useState(false);
   const { shots } = useShots(t.id);
 
   /** Runs one action on the task and refreshes; the core answers 409 when the state no longer fits. */
@@ -57,6 +58,23 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
     window.location.hash = "#/tasks";
   };
 
+  /** Undoes the merge at once; the toast then offers to merge it back. */
+  async function revert() {
+    setConfirmRevert(false);
+    try {
+      await api(`/tasks/${t.id}/revert`, { method: "POST", body: {} });
+      reload();
+      steps.reload();
+      offerUndo(`המיזוג של #${t.id} הוחזר`, async () => {
+        await api(`/tasks/${t.id}/unrevert`, { method: "POST", body: {} });
+        reload();
+        steps.reload();
+      });
+    } catch (err) {
+      notify(errorText(err));
+    }
+  }
+
   const approval = approvals.data?.find((a) => a.task_id === t.id);
   const stage = stageOf(t.status, (steps.data ?? []).map((s) => s.to_status));
   const running = RUNNING.has(t.status) || t.status === "received";
@@ -66,7 +84,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
   return (
     <div className="body">
       <div className="group">
-        <StatusPill status={t.status} />
+        <StatusPill status={t.status} reverted={!!t.reverted_at} />
         <h1 className="h1s">{taskTitle(t)}</h1>
         <div className="muted"><bdi>{t.project_name}</bdi> · {formatNumber(t.tokens_used)} טוקנים</div>
       </div>
@@ -79,12 +97,27 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
         </div>
       )}
 
-      {!trashed && t.status === "merged" && (
+      {!trashed && t.status === "merged" && !t.reverted_at && (
         <div className="card good">
           <div className="ttl" style={{ color: "var(--success-ink)" }}>השינוי מוזג לפרויקט</div>
           <p className="txt">אם משהו לא נראה טוב, אפשר להחזיר. נוצר שינוי הפוך, ושום דבר לא נמחק.</p>
-          <div className="row"><button type="button" className="btn" disabled>החזר את המיזוג</button><Soon>עוד לא זמין</Soon></div>
+          <button type="button" className="btn" disabled={!connected} onClick={() => setConfirmRevert(true)}>החזר את המיזוג</button>
         </div>
+      )}
+
+      {!trashed && t.status === "merged" && t.reverted_at && (
+        <div className="card">
+          <div className="ttl">המיזוג הוחזר</div>
+          <p className="txt">הפרויקט חזר למצב שלפני המשימה. אפשר למזג את השינוי שוב.</p>
+          <button type="button" className="btn" disabled={!connected} onClick={() => api(`/tasks/${t.id}/unrevert`, { method: "POST", body: {} }).then(() => { reload(); steps.reload(); }, (err) => notify(errorText(err)))}>מזג שוב</button>
+        </div>
+      )}
+
+      {confirmRevert && (
+        <Sheet title={`להחזיר את המיזוג של #${t.id}?`} onClose={() => setConfirmRevert(false)}>
+          <p className="txt">הפרויקט יחזור למצב שלפני המשימה. ייווצר שינוי הפוך בענף הראשי, ושום דבר לא נמחק. אפשר לבטל ממש אחרי, או למזג שוב בהמשך.</p>
+          <div className="row"><button type="button" className="btn dan grow" onClick={() => void revert()}>החזר</button><button type="button" className="btn grow" onClick={() => setConfirmRevert(false)}>ביטול</button></div>
+        </Sheet>
       )}
 
       {!trashed && t.status === "awaiting_approval" && approval && (

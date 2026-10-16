@@ -54,7 +54,7 @@ export function TaskCard({ t, now, queue }: { t: TaskRow; now: number; queue?: n
   return (
     <a className="card" href={`#/tasks/${t.id}`}>
       <div className="row between">
-        <StatusPill status={t.status} />
+        <StatusPill status={t.status} reverted={!!t.reverted_at} />
         <span className="muted">{queue ? `מקום ${queue} בתור · ` : ""}{relativeTime(t.updated_at, now)}</span>
       </div>
       <div className="ttl clamp2">{taskTitle(t)}</div>

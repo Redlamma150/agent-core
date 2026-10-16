@@ -155,6 +155,41 @@ describe("pipeline", () => {
     expect(t.tasks.get(t.task.id).status).toBe("awaiting_approval");
   });
 
+  it("approve with stash merges over the owner's unsaved changes and keeps them", async () => {
+    const t = await setup();
+    t.pipeline.start(t.task.id);
+    await t.pipeline.idle();
+    writeFileSync(join(t.repo, "README.md"), "owner is editing\n");
+    const approval = t.approvals.pending()[0]!;
+    const res = await t.pipeline.resolveApproval(approval.id, true, undefined, { stash: true });
+    expect(res.warning).toBeUndefined();
+    expect(t.tasks.get(t.task.id).status).toBe("merged");
+    expect(readFileSync(join(t.repo, "README.md"), "utf8")).toBe("owner is editing\n");
+    expect(existsSync(join(t.repo, "hello.txt"))).toBe(true);
+  });
+
+  it("reverts a merged task and merges it back, keeping the task merged", async () => {
+    const t = await setup();
+    t.pipeline.start(t.task.id);
+    await t.pipeline.idle();
+    await t.pipeline.resolveApproval(t.approvals.pending()[0]!.id, true);
+
+    const reverted = await t.pipeline.revert(t.task.id);
+    expect(reverted).toMatchObject({ status: "merged", reverted_at: expect.any(String) });
+    expect(existsSync(join(t.repo, "hello.txt"))).toBe(false);
+    await expect(t.pipeline.revert(t.task.id)).rejects.toThrow(/already reverted/);
+
+    const back = await t.pipeline.unrevert(t.task.id);
+    expect(back.reverted_at).toBeNull();
+    expect(existsSync(join(t.repo, "hello.txt"))).toBe(true);
+    await expect(t.pipeline.unrevert(t.task.id)).rejects.toThrow(/not reverted/);
+  });
+
+  it("does not revert a task that is not merged", async () => {
+    const t = await setup();
+    await expect(t.pipeline.revert(t.task.id)).rejects.toThrow(/only a merged task/);
+  });
+
   it("stop aborts the running agent and leaves no approval", async () => {
     let release!: () => void;
     let signal: AbortSignal | undefined;

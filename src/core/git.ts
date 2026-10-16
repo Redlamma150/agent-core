@@ -2,12 +2,23 @@ import { existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { simpleGit } from "simple-git";
 
-export class MergeError extends Error {}
+/** Why a merge or revert could not run. "dirty" means unsaved changes in the project: the owner can have them set aside. */
+export type MergeReason = "dirty" | "branch" | "conflict" | "missing";
+export class MergeError extends Error {
+  constructor(message: string, readonly reason: MergeReason = "conflict") {
+    super(message);
+  }
+}
 export class SecretFileError extends Error {}
 
 const IDENTITY = ["-c", "user.name=agent-core", "-c", "user.email=agent-core@localhost"];
 const SECRET_FILE = /(^|\/)(\.env(\..+)?|id_rsa|id_ed25519|[^/]+\.(pem|key|p12|pfx))$/;
 const isSecretFile = (path: string) => SECRET_FILE.test(path) && !/\.env\.(example|sample|template)$/.test(path);
+
+export interface MergeOutcome {
+  /** null: nothing was set aside. false: the owner's changes could not be put back on top of the merge and stay in `git stash`. */
+  stashRestored: boolean | null;
+}
 
 export interface Prepared {
   branch: string;
@@ -73,17 +84,33 @@ export class GitService {
    * Merges the task branch into the base branch in the owner's checkout, then removes the worktree and branch.
    * Needs the owner's checkout to be on the base branch with no uncommitted changes; a conflict is aborted cleanly.
    */
-  async merge(repoPath: string, taskId: number, base: string): Promise<void> {
+  async merge(repoPath: string, taskId: number, base: string, opts: { stash?: boolean } = {}): Promise<MergeOutcome> {
     const git = simpleGit(repoPath);
     const branch = `task-${taskId}`;
     const current = (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
     // These messages go straight to the owner in the app, so they are in Hebrew and say what to do.
-    if (current !== base) throw new MergeError(`תיקיית הפרויקט פתוחה כרגע על הענף "${current}" ולא על "${base}". עבור ל-${base} ונסה לאשר שוב.`);
+    if (current !== base) throw new MergeError(`תיקיית הפרויקט פתוחה כרגע על הענף "${current}" ולא על "${base}". עבור ל-${base} ונסה לאשר שוב.`, "branch");
     // Only changes to tracked files block a merge. Untracked files (.DS_Store, notes) are harmless: if one of them
     // would be overwritten by the task, git itself refuses the merge below and it is aborted cleanly.
-    if ((await git.raw(["status", "--porcelain", "--untracked-files=no"])).trim() !== "") {
-      throw new MergeError("יש בתיקיית הפרויקט שינויים בקבצים שלא נשמרו (commit). שמור אותם או בטל אותם ונסה לאשר שוב.");
+    const dirty = (await git.raw(["status", "--porcelain", "--untracked-files=no"])).trim() !== "";
+    if (dirty && !opts.stash) {
+      throw new MergeError("יש בתיקיית הפרויקט שינויים בקבצים שלא נשמרו (commit). שמור אותם או בטל אותם ונסה לאשר שוב.", "dirty");
     }
+    // Set the owner's unsaved changes aside (tracked files only) and bring them back after the merge.
+    const stashTag = `agent-core task-${taskId}`;
+    if (dirty) await git.raw([...IDENTITY, "stash", "push", "-m", stashTag]);
+    const restore = async (): Promise<MergeOutcome> => {
+      if (!dirty) return { stashRestored: null };
+      try {
+        await git.raw(["stash", "pop"]);
+        if ((await git.status()).conflicted.length === 0) return { stashRestored: true };
+      } catch {
+        // fall through: the pop hit a conflict
+      }
+      // The changes would conflict with the merged ones. Remove the half applied state; git keeps the stash entry.
+      await git.raw(["reset", "--hard", "HEAD"]).catch(() => undefined);
+      return { stashRestored: false };
+    };
     let failure: string | null = null;
     try {
       await git.raw([...IDENTITY, "merge", "--no-ff", branch, "-m", `Merge ${branch}`]);
@@ -94,9 +121,43 @@ export class GitService {
     if (failure === null && (await git.status()).conflicted.length > 0) failure = "conflicting changes";
     if (failure !== null) {
       await git.raw(["merge", "--abort"]).catch(() => undefined);
-      throw new MergeError(`המיזוג נכשל (${failure}). ייתכן שהשינויים מתנגשים עם שינויים שעשית בפרויקט.`);
+      if (dirty) await git.raw(["stash", "pop"]).catch(() => undefined); // nothing was merged: give the owner their changes back
+      throw new MergeError(`המיזוג נכשל (${failure}). ייתכן שהשינויים מתנגשים עם שינויים שעשית בפרויקט.`, "conflict");
     }
     await this.cleanup(repoPath, taskId);
+    return restore();
+  }
+
+  /** The commit that merged a task into the base branch (merges are always `Merge task-<id>`), or null if it cannot be found. */
+  async findMerge(repoPath: string, taskId: number): Promise<string | null> {
+    const out = await simpleGit(repoPath).raw(["log", "--merges", "-1", "--format=%H", "--fixed-strings", `--grep=Merge task-${taskId}`]).catch(() => "");
+    return out.trim() || null;
+  }
+
+  /**
+   * Undoes a merge with a new commit on the base branch (nothing is rewritten or deleted), so it can itself be undone.
+   * Returns the new commit. Needs the owner's checkout on the base branch without unsaved changes, like a merge does.
+   */
+  async revert(repoPath: string, commit: string, base: string): Promise<string> {
+    const git = simpleGit(repoPath);
+    const current = (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
+    if (current !== base) throw new MergeError(`תיקיית הפרויקט פתוחה כרגע על הענף "${current}" ולא על "${base}". עבור ל-${base} ונסה שוב.`, "branch");
+    if ((await git.raw(["status", "--porcelain", "--untracked-files=no"])).trim() !== "") {
+      throw new MergeError("יש בתיקיית הפרויקט שינויים בקבצים שלא נשמרו (commit). שמור אותם או בטל אותם ונסה שוב.", "dirty");
+    }
+    const parents = (await git.raw(["rev-list", "--parents", "-n", "1", commit])).trim().split(" ").length - 1;
+    let failure: string | null = null;
+    try {
+      await git.raw([...IDENTITY, "revert", ...(parents > 1 ? ["-m", "1"] : []), "--no-edit", commit]);
+    } catch (err) {
+      failure = (err as Error).message.split("\n")[0] ?? "unknown error";
+    }
+    if (failure === null && (await git.status()).conflicted.length > 0) failure = "conflicting changes";
+    if (failure !== null) {
+      await git.raw(["revert", "--abort"]).catch(() => undefined);
+      throw new MergeError(`ההחזרה נכשלה (${failure}). ייתכן שקבצים אלה השתנו מאז המיזוג.`, "conflict");
+    }
+    return (await git.revparse(["HEAD"])).trim();
   }
 
   async cleanup(repoPath: string, taskId: number): Promise<void> {

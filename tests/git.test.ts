@@ -109,4 +109,85 @@ describe("GitService", () => {
     expect(readFileSync(join(repo, "README.md"), "utf8")).toBe("from main\n");
     expect(existsSync(p.worktree)).toBe(true); // task work is kept for the owner to decide
   });
+
+  const commit = async (repo: string, msg: string) => {
+    await simpleGit(repo).add("-A");
+    await simpleGit(repo).raw(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg]);
+  };
+
+  describe("merge with the owner's unsaved changes set aside", () => {
+    it("merges, and puts the unsaved changes back when they do not overlap", async () => {
+      const { repo, git } = await makeRepo();
+      writeFileSync(join(repo, "other.txt"), "base\n");
+      await commit(repo, "other");
+      const p = await git.prepare(repo, 3);
+      writeFileSync(join(p.worktree, "new.txt"), "from task\n");
+      await git.commitAll(p.worktree, "task");
+      writeFileSync(join(repo, "other.txt"), "owner edit\n"); // unsaved, tracked
+
+      await expect(git.merge(repo, 3, "main")).rejects.toMatchObject({ reason: "dirty" });
+      expect(await git.merge(repo, 3, "main", { stash: true })).toEqual({ stashRestored: true });
+      expect(readFileSync(join(repo, "new.txt"), "utf8")).toBe("from task\n");
+      expect(readFileSync(join(repo, "other.txt"), "utf8")).toBe("owner edit\n");
+      expect(await simpleGit(repo).raw(["stash", "list"])).toBe("");
+    });
+
+    it("keeps the owner's changes in git stash when they conflict with the merge", async () => {
+      const { repo, git } = await makeRepo();
+      const p = await git.prepare(repo, 4);
+      writeFileSync(join(p.worktree, "README.md"), "from task\n");
+      await git.commitAll(p.worktree, "task");
+      writeFileSync(join(repo, "README.md"), "owner edit\n");
+
+      expect(await git.merge(repo, 4, "main", { stash: true })).toEqual({ stashRestored: false });
+      expect(readFileSync(join(repo, "README.md"), "utf8")).toBe("from task\n"); // merge done, tree clean
+      expect((await simpleGit(repo).status()).isClean()).toBe(true);
+      expect(await simpleGit(repo).raw(["stash", "show", "-p"])).toContain("owner edit"); // nothing was lost
+    });
+
+    it("gives the changes back when the merge itself fails", async () => {
+      const { repo, git } = await makeRepo();
+      const p = await git.prepare(repo, 8);
+      writeFileSync(join(p.worktree, "README.md"), "from task\n");
+      await git.commitAll(p.worktree, "task");
+      writeFileSync(join(repo, "README.md"), "from main\n");
+      await commit(repo, "main edit"); // makes the merge conflict
+      writeFileSync(join(repo, "README.md"), "unsaved on top\n");
+      await expect(git.merge(repo, 8, "main", { stash: true })).rejects.toMatchObject({ reason: "conflict" });
+      expect(readFileSync(join(repo, "README.md"), "utf8")).toBe("unsaved on top\n");
+      expect(await simpleGit(repo).raw(["stash", "list"])).toBe("");
+    });
+  });
+
+  describe("revert", () => {
+    it("undoes a merge with a new commit, and undoing the revert brings the change back", async () => {
+      const { repo, git } = await makeRepo();
+      const p = await git.prepare(repo, 2);
+      writeFileSync(join(p.worktree, "new.txt"), "from task\n");
+      await git.commitAll(p.worktree, "task");
+      await git.merge(repo, 2, "main");
+
+      const merge = await git.findMerge(repo, 2);
+      expect(merge).toMatch(/^[0-9a-f]{40}$/);
+      const reverted = await git.revert(repo, merge!, "main");
+      expect(existsSync(join(repo, "new.txt"))).toBe(false);
+      expect(await simpleGit(repo).raw(["log", "--oneline"])).toContain("Revert");
+
+      await git.revert(repo, reverted, "main"); // undo the revert
+      expect(readFileSync(join(repo, "new.txt"), "utf8")).toBe("from task\n");
+    });
+
+    it("finds no merge for a task that was never merged, and refuses on unsaved changes or the wrong branch", async () => {
+      const { repo, git } = await makeRepo();
+      expect(await git.findMerge(repo, 99)).toBeNull();
+      const p = await git.prepare(repo, 1);
+      writeFileSync(join(p.worktree, "a.txt"), "1");
+      await git.commitAll(p.worktree, "task");
+      await git.merge(repo, 1, "main");
+      const merge = (await git.findMerge(repo, 1))!;
+      writeFileSync(join(repo, "README.md"), "unsaved\n");
+      await expect(git.revert(repo, merge, "main")).rejects.toMatchObject({ reason: "dirty" });
+      await expect(git.revert(repo, merge, "develop")).rejects.toMatchObject({ reason: "branch" });
+    });
+  });
 });

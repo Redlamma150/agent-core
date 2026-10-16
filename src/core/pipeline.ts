@@ -9,7 +9,7 @@ import type { ActivityService } from "./activity.js";
 import type { MediaService } from "./media.js";
 import type { Approval, ApprovalService } from "./approvals.js";
 import type { BudgetService } from "./budget.js";
-import { SecretFileError, type GitService } from "./git.js";
+import { MergeError, SecretFileError, type GitService } from "./git.js";
 import type { ScreenshotService } from "./screenshots.js";
 import { runTests } from "./verify.js";
 import { InvalidActionError, type Task, type TaskService } from "./tasks.js";
@@ -30,7 +30,11 @@ export interface TaskDriver {
   continueTask(taskId: number, note?: string): Task;
   /** Starts a new task with the same project and text. */
   duplicate(taskId: number): Task;
-  resolveApproval(approvalId: number, approve: boolean, note?: string): Promise<Approval>;
+  /** `stash` (approve only): set the owner's unsaved changes aside for the merge. `warning` says when they could not be put back. */
+  resolveApproval(approvalId: number, approve: boolean, note?: string, opts?: { stash?: boolean }): Promise<Approval & { warning?: string }>;
+  /** Undoes the merge of a task with a revert commit; `unrevert` merges it back. The task stays `merged`. */
+  revert(taskId: number): Promise<Task>;
+  unrevert(taskId: number): Promise<Task>;
   /** Where the task's work is on this computer: its worktree while it exists, otherwise the project folder. */
   locate(taskId: number): { path: string; kind: "worktree" | "project"; exists: boolean };
 }
@@ -140,17 +144,46 @@ export class Pipeline implements TaskDriver {
   }
 
   /** Approve merges the branch first: if the merge fails, the approval stays pending and the error reaches the owner. */
-  async resolveApproval(approvalId: number, approve: boolean, note?: string): Promise<Approval> {
+  async resolveApproval(approvalId: number, approve: boolean, note?: string, opts: { stash?: boolean } = {}): Promise<Approval & { warning?: string }> {
     const { tasks, approvals, git } = this.d;
     const approval = approvals.get(approvalId);
     const task = tasks.get(approval.task_id);
+    let warning: string | undefined;
     if (approve && approval.status === "pending") {
       if (!task.base_branch) throw new Error(`task ${task.id} has no base branch recorded`);
-      await git.merge(this.project(task).repo_path, task.id, task.base_branch);
+      const outcome = await git.merge(this.project(task).repo_path, task.id, task.base_branch, { stash: opts.stash });
+      if (outcome.stashRestored === false) {
+        warning = "המשימה מוזגה, אבל השינויים שלא שמרת התנגשו איתה ולא הוחזרו. הם שמורים ב-git stash בפרויקט (git stash pop).";
+        tasks.note(task.id, "stash_kept", warning);
+      }
     }
     const resolved = approvals.resolve(approvalId, approve, note);
     if (!approve) this.start(task.id, note);
-    return resolved;
+    return warning ? { ...resolved, warning } : resolved;
+  }
+
+  async revert(taskId: number): Promise<Task> {
+    const { tasks, git } = this.d;
+    const task = tasks.get(taskId);
+    if (task.status !== "merged") throw new InvalidActionError("only a merged task can be reverted");
+    if (task.reverted_at) throw new InvalidActionError("this merge was already reverted");
+    if (!task.base_branch) throw new Error(`task ${taskId} has no base branch recorded`);
+    const repo = this.project(task).repo_path;
+    const commit = await git.findMerge(repo, taskId);
+    if (!commit) throw new MergeError("לא מצאתי את הקומיט של המיזוג בפרויקט, ולכן אי אפשר להחזיר אותו אוטומטית.", "missing");
+    const revertCommit = await git.revert(repo, commit, task.base_branch);
+    this.d.db.prepare("UPDATE tasks SET revert_commit = ? WHERE id = ?").run(revertCommit, taskId);
+    return tasks.setReverted(taskId, true);
+  }
+
+  async unrevert(taskId: number): Promise<Task> {
+    const { tasks, git, db } = this.d;
+    const task = tasks.get(taskId);
+    if (task.status !== "merged" || !task.reverted_at) throw new InvalidActionError("this merge was not reverted");
+    const row = db.prepare("SELECT revert_commit FROM tasks WHERE id = ?").get(taskId) as { revert_commit: string | null };
+    if (!row.revert_commit) throw new MergeError("לא מצאתי את קומיט ההחזרה, ולכן אי אפשר לבטל אותו אוטומטית.", "missing");
+    await git.revert(this.project(task).repo_path, row.revert_commit, task.base_branch!);
+    return tasks.setReverted(taskId, false);
   }
 
   locate(taskId: number): { path: string; kind: "worktree" | "project"; exists: boolean } {

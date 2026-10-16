@@ -17,7 +17,7 @@ const notImplemented = (reply: FastifyReply, milestone: string) =>
   reply.code(501).send({ error: "not_implemented", milestone });
 
 const TASK_COLUMNS =
-  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.created_at, t.updated_at";
+  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.created_at, t.updated_at";
 const TASK_FROM = "FROM tasks t JOIN projects p ON p.id = t.project_id";
 /** Why a blocked or stopped task stopped: the summary of the step that moved it there. */
 const REASON = "(SELECT summary FROM steps WHERE task_id = t.id AND to_status IN ('blocked','stopped') ORDER BY id DESC LIMIT 1) AS reason";
@@ -30,7 +30,7 @@ const VIEWS: Record<string, string> = {
 const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional() });
 const editTaskBody = z.object({ title: z.string().trim().min(1).max(80).optional(), description: z.string().trim().min(1).max(5000).optional() }).refine((b) => b.title !== undefined || b.description !== undefined, "nothing to change");
 const continueBody = z.object({ note: z.string().trim().max(5000).optional() });
-const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z.string().max(5000).optional() });
+const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z.string().max(5000).optional(), stash: z.boolean().optional() });
 
 export interface Services {
   tasks: TaskService;
@@ -45,7 +45,7 @@ export interface Services {
 export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
-    if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message });
+    if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message, reason: err.reason });
     if (err instanceof InvalidActionError || err instanceof InvalidTransitionError || err instanceof AlreadyResolvedError) return reply.code(409).send({ error: "conflict", message: err.message });
     if (err instanceof OperatorBusyError) return reply.code(429).send({ error: "busy", message: "המתפעל עונה כרגע להודעה אחרת. נסה שוב בעוד רגע." });
     if (err instanceof OperatorFailedError) {
@@ -206,6 +206,14 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
     driver.continueTask(id, continueBody.parse(req.body ?? {}).note);
     return oneTask(id);
   });
+  for (const [path, run] of [["revert", (id: number) => driver.revert(id)], ["unrevert", (id: number) => driver.unrevert(id)]] as const) {
+    app.post<{ Params: { id: string } }>(`/tasks/:id/${path}`, async (req, reply) => {
+      const id = taskId(req.params.id);
+      if (id === null) return reply.code(400).send({ error: "invalid_id" });
+      await run(id);
+      return oneTask(id);
+    });
+  }
   app.post<{ Params: { id: string } }>("/tasks/:id/duplicate", async (req, reply) => {
     const id = taskId(req.params.id);
     if (id === null) return reply.code(400).send({ error: "invalid_id" });
@@ -241,7 +249,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   app.post<{ Params: { id: string } }>("/approvals/:id", async (req, reply) => {
     if (!/^\d+$/.test(req.params.id)) return reply.code(400).send({ error: "invalid_id" });
     const body = decisionBody.parse(req.body);
-    return driver.resolveApproval(Number(req.params.id), body.decision === "approve", body.note);
+    return driver.resolveApproval(Number(req.params.id), body.decision === "approve", body.note, { stash: body.stash });
   });
 
   app.get("/projects/active", async (_req, reply) => notImplemented(reply, "M6"));

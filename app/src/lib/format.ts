@@ -42,6 +42,7 @@ export interface TaskRow {
   reason: string | null;
   archived_at: string | null;
   deleted_at: string | null;
+  reverted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -118,6 +119,9 @@ const NOTE_LABELS: Record<string, string> = {
   tests_failed: "בדיקות הפרויקט נכשלו",
   screenshots_taken: "צילומי לפני ואחרי מוכנים",
   screenshots_failed: "לא הצלחתי לצלם את התוצר",
+  reverted: "המיזוג הוחזר",
+  revert_undone: "המיזוג הוחזר למקומו",
+  stash_kept: "השינויים שלא שמרת נשארו ב-git stash",
 };
 
 export function stepLabel(step: { agent: string; status: string; to_status: string | null }): string {
