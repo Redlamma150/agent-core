@@ -141,6 +141,10 @@ describe("a refused call is a pause, not a failure", () => {
 });
 
 describe("pipeline under a quota refusal", () => {
+  // The reset is always two hours from now, so the test does not depend on today's date.
+  const RESET = Math.floor(Date.now() / 1000) + 7200;
+  const refusal = () => rateEvent({ ...REAL_EVENT, status: "rejected", resetsAt: RESET, unifiedWindows: { five_hour: { utilization: 1, resetsAt: RESET } } });
+
   async function setup(autoResume = true) {
     const { repo, git } = await makeRepo();
     const db = openDb(":memory:");
@@ -155,7 +159,7 @@ describe("pipeline under a quota refusal", () => {
       state.calls++;
       const taskId = Number(/Task (\d+)/.exec(prompt)?.[1]);
       if (state.refuse) {
-        yield rateEvent({ ...REAL_EVENT, status: "rejected" });
+        yield refusal();
         yield failure;
         return;
       }
@@ -180,7 +184,7 @@ describe("pipeline under a quota refusal", () => {
     for (const id of [first.id, second.id]) {
       const task = t.tasks.get(id);
       expect(task.pause_reason).toBe("quota");
-      expect(task.scheduled_for).toBe("2026-10-16 21:21:00"); // reset + one minute
+      expect(task.scheduled_for).toBe(new Date((RESET + 60) * 1000).toISOString().slice(0, 19).replace("T", " ")); // reset + one minute
       expect(["received", "planning"]).toContain(task.status);
     }
     expect(t.tasks.get(first.id)).toMatchObject({ failures: 0 });
@@ -189,8 +193,8 @@ describe("pipeline under a quota refusal", () => {
 
     t.state.refuse = false;
     t.quota.clearBlock();
-    expect(t.scheduler.runDue(new Date(Date.UTC(2026, 9, 16, 21, 20)))).toBe(0); // not yet
-    expect(t.scheduler.runDue(new Date(Date.UTC(2026, 9, 16, 21, 22)))).toBe(2);
+    expect(t.scheduler.runDue(new Date(RESET * 1000))).toBe(0); // not yet
+    expect(t.scheduler.runDue(new Date((RESET + 120) * 1000))).toBe(2);
     await t.pipeline.idle();
     expect(t.tasks.get(first.id).status).toBe("awaiting_approval");
     expect(t.tasks.get(second.id).status).toBe("awaiting_approval");
@@ -219,7 +223,7 @@ describe("pipeline under a quota refusal", () => {
     t.tasks.stop(task.id);
     expect(t.tasks.get(task.id)).toMatchObject({ scheduled_for: null, pause_reason: null });
     t.state.refuse = false;
-    expect(t.scheduler.runDue(new Date(Date.UTC(2026, 9, 17)))).toBe(0);
+    expect(t.scheduler.runDue(new Date((RESET + 3600) * 1000))).toBe(0);
     expect(existsSync(join(t.repo, "hello.txt"))).toBe(false);
   });
 });
