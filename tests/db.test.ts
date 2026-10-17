@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db/index.js";
 
-const TABLES = ["activity", "agent_templates", "approvals", "attachments", "llm_calls", "projects", "push_subscriptions", "settings", "steps", "tasks"];
+const TABLES = ["activity", "agent_templates", "approvals", "attachments", "llm_calls", "projects", "push_subscriptions", "quota_windows", "settings", "steps", "tasks"];
 
 describe("openDb", () => {
   it("creates the database from scratch on first run", () => {

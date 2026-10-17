@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Options, PermissionMode, SDKMessage, SDKResultMessage, SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Db } from "../db/index.js";
+import { UNKNOWN_RESET_MS, type QuotaService, type RateLimitInfo } from "../core/quota.js";
 import { toolCallsOf, type ActivityService } from "../core/activity.js";
 import type { TaskService } from "../core/tasks.js";
 import { handoffJsonSchema, parseHandoff, type AgentRole, type Handoff } from "./contract.js";
@@ -35,7 +36,10 @@ export interface RunRequest {
   signal?: AbortSignal;
 }
 
-export type RunResult = { ok: true; handoff: Handoff; tokens: number } | { ok: false; reason: string; tokens: number };
+export type RunResult =
+  | { ok: true; handoff: Handoff; tokens: number }
+  /** `quotaUntil`: the subscription refused the call because its quota is used up, until then. Not the agent's failure. */
+  | { ok: false; reason: string; tokens: number; quotaUntil?: Date };
 
 const defaultQuery: QueryFn = async function* (params) {
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
@@ -72,7 +76,7 @@ export function protectedPathsFor(dbPath: string, envFile = ".env"): string[] {
 
 export class AgentRunner {
   /** `protectedPaths`: files and folders of the core itself (.env, database) that agents must never read. */
-  constructor(private db: Db, private tasks: TaskService, private queryFn: QueryFn = defaultQuery, private activity?: ActivityService, private protectedPaths: string[] = []) {}
+  constructor(private db: Db, private tasks: TaskService, private queryFn: QueryFn = defaultQuery, private activity?: ActivityService, private protectedPaths: string[] = [], private quota?: QuotaService) {}
 
   /** Runs one agent call, validates its output against the handoff contract and logs it to llm_calls. */
   async run(req: RunRequest): Promise<RunResult> {
@@ -81,6 +85,7 @@ export class AgentRunner {
     req.signal?.addEventListener("abort", onAbort);
 
     let result: SDKResultMessage | undefined;
+    let quotaUntil: Date | undefined;
     let outcome: { ok: true; handoff: Handoff } | { ok: false; reason: string };
     try {
       // The SDK reports a missing working directory as "binary failed to launch", which sends people hunting in the wrong place.
@@ -109,7 +114,14 @@ export class AgentRunner {
       };
       for await (const message of this.queryFn({ prompt: req.prompt, options })) {
         if (message.type === "result") result = message;
-        else if (message.type === "assistant" && this.activity && req.taskId !== null) {
+        else if (message.type === "rate_limit_event") {
+          const until = this.quota?.record(message.rate_limit_info as RateLimitInfo);
+          if (until) quotaUntil = until;
+        } else if (message.type === "assistant" && message.error === "rate_limit") {
+          // A refusal without a report of when it ends: wait for the 5 hour window if it is known, otherwise a short while.
+          quotaUntil ??= this.quota?.nextReset() ?? new Date(Date.now() + UNKNOWN_RESET_MS);
+          this.quota?.block(quotaUntil);
+        } else if (message.type === "assistant" && this.activity && req.taskId !== null) {
           for (const call of toolCallsOf(message, req.cwd)) this.activity.record(req.taskId, req.role, call.tool, call.target);
         }
       }
@@ -121,6 +133,8 @@ export class AgentRunner {
     }
 
     const tokens = result ? countTokens(result) : 0;
+    // A call the subscription refused used nothing and says nothing about the agent: it is not counted as a bad answer.
+    if (quotaUntil && tokens === 0) return { ok: false, reason: "subscription quota used up", tokens, quotaUntil };
     this.db
       .prepare("INSERT INTO llm_calls (task_id, agent, model, input_tokens, output_tokens, valid_output, escalated) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(
@@ -133,7 +147,7 @@ export class AgentRunner {
         req.escalated ? 1 : 0,
       );
     if (req.taskId !== null) this.tasks.addTokens(req.taskId, tokens);
-    return outcome.ok ? { ok: true, handoff: outcome.handoff, tokens } : { ok: false, reason: outcome.reason, tokens };
+    return outcome.ok ? { ok: true, handoff: outcome.handoff, tokens } : { ok: false, reason: outcome.reason, tokens, ...(quotaUntil ? { quotaUntil } : {}) };
   }
 
   private validate(result: SDKResultMessage, req: RunRequest) {

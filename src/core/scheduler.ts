@@ -17,7 +17,7 @@ export class Scheduler {
   /** Starts every scheduled task that is due and returns how many were started. */
   runDue(now = new Date()): number {
     const due = this.db
-      .prepare("SELECT id FROM tasks WHERE status = 'received' AND scheduled_for IS NOT NULL AND scheduled_for <= ? AND deleted_at IS NULL ORDER BY scheduled_for, id")
+      .prepare("SELECT id FROM tasks WHERE status IN ('received','planning','in_progress') AND scheduled_for IS NOT NULL AND scheduled_for <= ? AND deleted_at IS NULL ORDER BY scheduled_for, id")
       .all(sqliteTime(now)) as { id: number }[];
     for (const { id } of due) {
       this.tasks.clearSchedule(id);

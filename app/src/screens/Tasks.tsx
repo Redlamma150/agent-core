@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { useApi, useConnected, useTick } from "../hooks";
 import { api } from "../lib/api";
-import { activityLabel, formatNumber, GROUPS, parseDbDate, RUNNING, taskTitle, type GroupKey, type TaskRow } from "../lib/format";
+import { activityLabel, clockTime, formatNumber, GROUPS, parseDbDate, RUNNING, taskTitle, type GroupKey, type Quota, type TaskRow } from "../lib/format";
 import { Icon, InnerBar, StatusPill, TopBar } from "../ui";
 import { useUndo } from "../undo";
 import { errorText, State, TaskCard } from "./common";
 
 interface ActivityRow { id: number; agent: string; tool: string; target: string | null; created_at: string }
 interface UsageWindow { input_tokens: number; output_tokens: number }
-interface Usage { last_5h: UsageWindow }
+interface Usage { last_5h: UsageWindow; quota: Quota | null }
 
 const VIEW_TITLES = { archived: "ארכיון", trash: "פח (נמחק אחרי 30 יום)" } as const;
 
@@ -31,13 +31,16 @@ export function TasksScreen() {
             const inGroup = (g: GroupKey) => rows.filter((t) => (GROUPS[g].statuses as readonly string[]).includes(t.status));
             // Open on the group that needs attention first; the owner can still pick another one.
             const current: GroupKey = group ?? (inGroup("needs").length > 0 ? "needs" : inGroup("active").length > 0 ? "active" : "done");
-            const running = rows.find((t) => RUNNING.has(t.status));
+            const running = rows.find((t) => RUNNING.has(t.status) && !t.scheduled_for); // a task waiting for the quota is not running
             const queue = rows.filter((t) => t.status === "received" && !t.scheduled_for).sort((a, b) => a.id - b.id);
             const shown = inGroup(current);
             const tokens = usage.data ? usage.data.last_5h.input_tokens + usage.data.last_5h.output_tokens : null;
             return (
               <>
-                <DigestCard rows={rows} tokens={tokens} />
+                {usage.data?.quota?.blocked_until && (
+                  <div className="soft" role="status">מכסת המנוי נגמרה. משימות ימשיכו לבד אחרי {clockTime(usage.data.quota.blocked_until)}.</div>
+                )}
+                <DigestCard rows={rows} tokens={tokens} quota={usage.data?.quota ?? null} />
                 <div className="group">
                   <h2 className="h2">רץ עכשיו</h2>
                   {running ? <NowCard task={running} /> : <div className="card"><div className="muted">אף סוכן לא עובד כרגע</div></div>}
@@ -66,7 +69,7 @@ export function TasksScreen() {
 }
 
 /** Today at a glance. The detail comes from the operator in the chat, so the button just asks it. */
-function DigestCard({ rows, tokens }: { rows: TaskRow[]; tokens: number | null }) {
+function DigestCard({ rows, tokens, quota }: { rows: TaskRow[]; tokens: number | null; quota: Quota | null }) {
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
   const done = rows.filter((t) => t.status === "merged" && parseDbDate(t.updated_at) >= startOfDay).length;
@@ -81,7 +84,9 @@ function DigestCard({ rows, tokens }: { rows: TaskRow[]; tokens: number | null }
       </div>
       <div className="row wrap">
         <a className="btn sm on-dark" href={`#/chat?q=${encodeURIComponent("סכם לי את היום")}`} aria-disabled={!connected}>פרט לי בצ'אט</a>
-        {tokens !== null && <span className="muted">{formatNumber(tokens)} טוקנים ב-5 השעות האחרונות</span>}
+        {quota?.five_hour
+          ? <span className="muted">{Math.round(quota.five_hour.percent)}% מחלון 5 השעות</span>
+          : tokens !== null && <span className="muted">{formatNumber(tokens)} טוקנים ב-5 השעות האחרונות</span>}
       </div>
     </div>
   );

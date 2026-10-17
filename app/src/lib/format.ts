@@ -47,6 +47,8 @@ export interface TaskRow {
   ai: string | null;
   /** UTC time a scheduled task waits for; null when it is not waiting. */
   scheduled_for: string | null;
+  /** "quota" while the task waits for the subscription quota. */
+  pause_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -103,6 +105,19 @@ export function describeChange(c: FileChange): string {
     default: return c.added + c.removed === 0 ? "שונה" : `שונה · נוספו ${c.added}, הוסרו ${c.removed}`;
   }
 }
+
+export interface QuotaWindow { percent: number; resets_at: string }
+export interface Quota { five_hour: QuotaWindow | null; seven_day: QuotaWindow | null; blocked_until: string | null }
+
+/** "14:00", the clock time of an ISO or database time in the owner's time zone. */
+export const clockTime = (iso: string): string => {
+  const d = /[zZ]|[+-]\d\d:\d\d$/.test(iso) ? new Date(iso) : parseDbDate(iso);
+  return d.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false });
+};
+
+/** A task that is waiting for the subscription quota (not for a time the owner picked). */
+export const waitsForQuota = (t: Pick<TaskRow, "status" | "scheduled_for" | "pause_reason">): boolean =>
+  t.scheduled_for !== null && t.pause_reason === "quota" && ["received", "planning", "in_progress"].includes(t.status);
 
 /** "02:00", or "מחר ב-02:00" when the time is not today. */
 export function scheduleLabel(value: string, now = new Date()): string {

@@ -1,6 +1,6 @@
 import { useApi, useConnected } from "../hooks";
 import { api } from "../lib/api";
-import { formatNumber } from "../lib/format";
+import { clockTime, formatNumber, type Quota } from "../lib/format";
 import { TopBar } from "../ui";
 import { useUndo } from "../undo";
 import { errorText, State } from "./common";
@@ -55,6 +55,7 @@ function Tips() {
 
 interface Window { calls: number; input_tokens: number; output_tokens: number }
 interface Usage extends Window {
+  quota: Quota | null;
   last_5h: Window; last_24h: Window; last_7d: Window;
   top_tasks: { id: number; title: string | null; tokens: number }[];
 }
@@ -73,12 +74,22 @@ export function InsightsScreen() {
             const share = Math.min(100, Math.round((total(u.last_5h) / week) * 100));
             return (
               <>
-                <div className="card">
-                  <h2 className="h2">חלון 5 השעות</h2>
-                  <div className="big-num">{formatNumber(total(u.last_5h))} טוקנים</div>
-                  <div className="bar" aria-hidden="true"><span style={{ width: `${share}%` }} /></div>
-                  <div className="muted">{formatNumber(u.last_5h.calls)} קריאות למודל. הפס מראה כמה מהשבוע נוצל ב-5 השעות האחרונות. המערכת סופרת רק מה שהיא הריצה, ו-Claude לא מדווח כמה נשאר במנוי.</div>
-                </div>
+                {u.quota?.five_hour ? (
+                  <div className="card">
+                    <div className="row between"><h2 className="h2">חלון 5 השעות</h2><span className="muted">מתחדש ב-{clockTime(u.quota.five_hour.resets_at)}</span></div>
+                    <div className="big-num">{Math.round(u.quota.five_hour.percent)}%</div>
+                    <div className="bar" role="img" aria-label={`${Math.round(u.quota.five_hour.percent)} אחוז מחלון 5 השעות נוצלו`}><span style={{ width: `${Math.min(100, u.quota.five_hour.percent)}%` }} /></div>
+                    {u.quota.seven_day && <div className="row between"><span className="muted">השבוע</span><span style={{ fontSize: 14 }}>{Math.round(u.quota.seven_day.percent)}% · מתחדש {new Date(u.quota.seven_day.resets_at).toLocaleDateString("he-IL", { weekday: "long" })}</span></div>}
+                    <div className="muted">הנתון מגיע מהמנוי עצמו ומתעדכן בכל הרצה של סוכן. {formatNumber(total(u.last_5h))} טוקנים ב-{formatNumber(u.last_5h.calls)} קריאות הרצנו ב-5 השעות האחרונות.</div>
+                  </div>
+                ) : (
+                  <div className="card">
+                    <h2 className="h2">חלון 5 השעות</h2>
+                    <div className="big-num">{formatNumber(total(u.last_5h))} טוקנים</div>
+                    <div className="bar" aria-hidden="true"><span style={{ width: `${share}%` }} /></div>
+                    <div className="muted">{formatNumber(u.last_5h.calls)} קריאות למודל. הפס מראה כמה מהשבוע נוצל ב-5 השעות האחרונות. אחוז המכסה האמיתי יופיע אחרי הרצה הבאה של סוכן.</div>
+                  </div>
+                )}
                 <div className="card">
                   <h2 className="h2">לפי ספק, השבוע</h2>
                   <div className="row between"><span className="ai">Claude</span><span style={{ fontSize: 14 }}>{formatNumber(total(u.last_7d))} טוקנים · במנוי</span></div>

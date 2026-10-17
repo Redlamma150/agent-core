@@ -104,3 +104,10 @@ CREATE TABLE IF NOT EXISTS settings (
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS quota_windows (
+  kind       TEXT PRIMARY KEY CHECK (kind IN ('five_hour','seven_day')),
+  percent    REAL NOT NULL,
+  resets_at  TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

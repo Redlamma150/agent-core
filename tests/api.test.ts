@@ -241,7 +241,7 @@ describe("insights and settings", () => {
     expect(applied.json()).toMatchObject([{ id: "auto_stash", applied: true }]);
     expect((await send("GET", "/settings")).json()).toMatchObject({ auto_stash: true });
     expect((await send("POST", "/insights/auto_stash/unapply")).json()).toEqual([]);
-    expect((await send("PUT", "/settings", { auto_stash: true })).json()).toEqual({ auto_stash: true });
+    expect((await send("PUT", "/settings", { auto_stash: true })).json()).toMatchObject({ auto_stash: true });
     expect((await send("PUT", "/settings", { auto_stash: "yes" })).statusCode).toBe(400);
   });
 });

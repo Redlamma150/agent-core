@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useApi, useConnected } from "../hooks";
+import { clockTime, type Quota } from "../lib/format";
 import { api, uploadFile } from "../lib/api";
 import { Icon, Segmented, Toggle } from "../ui";
 import { errorText, State } from "./common";
@@ -51,7 +52,7 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
   const [files, setFiles] = useState<File[]>([]);
   const [fileErrors, setFileErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [when, setWhen] = useState<"now" | "night">("now");
+  const [when, setWhen] = useState<"now" | "night" | "quota">("now");
   const [needText, setNeedText] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState<{ id: number; failed: string[] } | null>(null);
@@ -60,6 +61,7 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
   const voiceAvailable = useVoiceAvailable();
   const voice = useVoice((text) => { setDescription((d) => (d.trim() ? `${d.trimEnd()}\n${text}` : text)); setNeedText(false); }, notify);
   const nightHour = useApi<{ night_hour: number }>("/settings").data?.night_hour ?? 2;
+  const quotaReset = useApi<{ quota: Quota | null }>("/usage").data?.quota?.five_hour?.resets_at ?? null;
 
   useEffect(() => {
     try {
@@ -94,7 +96,7 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
       if (files.length > 0) {
         const failed: string[] = [];
         for (const f of files) await uploadFile(task.id, f).catch(() => failed.push(f.name));
-        if (when === "now") await api(`/tasks/${task.id}/start`, { method: "POST", body: {} }); // a night task waits for its time
+        if (!(when === "night" || (when === "quota" && quotaReset !== null))) await api(`/tasks/${task.id}/start`, { method: "POST", body: {} }); // a scheduled task waits for its time
         if (failed.length > 0) {
           setPartial({ id: task.id, failed });
           setBusy(false);
@@ -158,9 +160,11 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
 
         <div className="group">
           <span className="label">מתי</span>
-          <Segmented<"now" | "night" | "quota"> label="מתי" value={when} onChange={(v) => v !== "quota" && setWhen(v)} options={[{ value: "now", label: "עכשיו" }, { value: "night", label: "הלילה" }, { value: "quota", label: "כשהמכסה מתחדשת", disabled: true }]} />
+          <Segmented<"now" | "night" | "quota"> label="מתי" value={when} onChange={setWhen} options={[{ value: "now", label: "עכשיו" }, { value: "night", label: "הלילה" }, { value: "quota", label: "כשהמכסה מתחדשת" }]} />
           {when === "night" && <span className="muted">המשימה תתחיל ב-{String(nightHour).padStart(2, "0")}:00 והמחשב צריך להיות דלוק. אפשר להתחיל אותה קודם מהמסך שלה.</span>}
-          <span className="muted">"כשהמכסה מתחדשת" תגיע כשהמערכת תדע לזהות מתי המכסה מתחדשת. <span className="soon-tag">בקרוב</span></span>
+          {when === "quota" && (
+            <span className="muted">{quotaReset ? `החלון של המנוי מתחדש ב-${clockTime(quotaReset)}. המשימה תתחיל אחריו.` : "עוד לא ידוע מתי המכסה מתחדשת (זה נלמד אחרי שסוכן רץ), ולכן המשימה תתחיל עכשיו."}</span>
+          )}
         </div>
 
         <div className="card" style={{ gap: 14 }}>

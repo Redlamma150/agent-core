@@ -9,7 +9,7 @@ import { useUndo } from "../undo";
 export function SettingsScreen({ onLogout }: { onLogout: () => void }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const { notify } = useUndo();
-  const core = useApi<{ auto_stash: boolean }>("/settings");
+  const core = useApi<{ auto_stash: boolean; auto_resume: boolean }>("/settings");
 
   useEffect(() => {
     void pushEnabled().then(setEnabled, () => setEnabled(false));
@@ -43,7 +43,12 @@ export function SettingsScreen({ onLogout }: { onLogout: () => void }) {
             ? <Toggle label="התראות במכשיר הזה" sub="בקשת אישור חדשה, משימה שנתקעה, נעצרה או מוזגה" checked={enabled === true} onChange={enabled === null ? undefined : toggle} />
             : <div className="muted">המכשיר לא תומך בהתראות. באייפון צריך קודם להוסיף את האפליקציה למסך הבית.</div>}
           <Toggle label="סיכום יומי" sub="הודעה אחת בסוף היום" checked={false} soon />
-          <Toggle label="המשך אוטומטי אחרי מכסה" sub="משימה שהושהתה תמשיך כשהמכסה מתחדשת" checked={false} soon />
+          <Toggle
+            label="המשך אוטומטי אחרי מכסה"
+            sub="כשמכסת המנוי נגמרת, המשימה מחכה וממשיכה לבד. כבוי: היא נחסמת ואתה ממשיך אותה"
+            checked={core.data?.auto_resume !== false}
+            onChange={core.data === null ? undefined : () => api("/settings", { method: "PUT", body: { auto_resume: core.data?.auto_resume === false } }).then(core.reload, () => notify("לא הצלחתי לעדכן את ההגדרה."))}
+          />
           <Toggle
             label="שמור שינויים בצד לפני מיזוג"
             sub="שינויים שלא נשמרו בפרויקט לא יעצרו מיזוג. הם חוזרים אחריו"
