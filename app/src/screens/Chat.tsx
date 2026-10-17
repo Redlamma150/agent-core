@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useConnected } from "../hooks";
-import { api } from "../lib/api";
+import { api, uploadChatFile } from "../lib/api";
 import { clock, useVoice, useVoiceAvailable } from "../lib/voice";
 import { Icon, TopBar } from "../ui";
 import { useUndo } from "../undo";
 import { errorText } from "./common";
+import { AttachmentChips, fileProblem, MAX_CHAT_FILES, MediaButtons } from "./media";
 
 interface Action { type: "created" | "stopped" | "continued"; task_id: number }
 interface Line {
   from: "me" | "system";
   text: string;
   actions?: Action[];
+  /** Names of the files that went with a message of the owner. */
+  files?: string[];
 }
 
 const KEY = "agent-core-chat";
@@ -34,6 +37,8 @@ export function ChatScreen({ ask }: { ask?: string }) {
   const connected = useConnected();
   const end = useRef<HTMLDivElement>(null);
   const asked = useRef(false);
+  const [files, setFiles] = useState<File[]>([]);
+  const [attaching, setAttaching] = useState(false);
   const { notify } = useUndo();
   const voiceAvailable = useVoiceAvailable();
   const voice = useVoice((spoken) => setText((t) => (t.trim() ? `${t.trimEnd()} ${spoken}` : spoken)), notify);
@@ -47,15 +52,32 @@ export function ChatScreen({ ask }: { ask?: string }) {
     end.current?.scrollIntoView({ block: "end" });
   }, [lines, busy]);
 
+  function addFiles(picked: File[]) {
+    const next = [...files];
+    for (const f of picked) {
+      const problem = fileProblem(f);
+      if (problem) notify(problem);
+      else if (next.length >= MAX_CHAT_FILES) notify(`אפשר לצרף עד ${MAX_CHAT_FILES} קבצים להודעה.`);
+      else next.push(f);
+    }
+    setFiles(next);
+  }
+
   async function send(message: string) {
-    const clean = message.trim();
+    // Files can be the whole message ("what is this?"), so the text may be empty when something is attached.
+    const clean = message.trim() || (files.length > 0 ? "צירפתי קבצים." : "");
     if (!clean || busy) return;
+    const sending = files;
     setText("");
+    setFiles([]);
+    setAttaching(false);
     setBusy(true);
     const history = lines.slice(-HISTORY).map(({ from, text: t }) => ({ from, text: t }));
-    setLines((l) => [...l, { from: "me", text: clean }]);
+    setLines((l) => [...l, { from: "me", text: clean, ...(sending.length > 0 ? { files: sending.map((f) => f.name) } : {}) }]);
     try {
-      const res = await api<{ reply: string; actions: Action[] }>("/chat", { method: "POST", body: { text: clean, history } });
+      const media: number[] = [];
+      for (const f of sending) media.push(await uploadChatFile(f));
+      const res = await api<{ reply: string; actions: Action[] }>("/chat", { method: "POST", body: { text: clean, history, ...(media.length > 0 ? { media } : {}) } });
       setLines((l) => [...l, { from: "system", text: res.reply, actions: res.actions }]);
     } catch (err) {
       setLines((l) => [...l, { from: "system", text: errorText(err) }]);
@@ -80,6 +102,7 @@ export function ChatScreen({ ask }: { ask?: string }) {
         {lines.map((l, i) => (
           <div key={i} className={`msg ${l.from === "me" ? "me" : "op"}`}>
             <span className="pre">{l.text}</span>
+            {l.files && <span style={{ fontSize: 13, opacity: 0.9 }}>צורפו: <bdi>{l.files.join(", ")}</bdi></span>}
             {l.actions?.map((a) => (
               <a key={`${a.type}-${a.task_id}`} className="btn sm" style={{ alignSelf: "flex-start" }} href={`#/tasks/${a.task_id}`}>{ACTION_LABEL[a.type]} #{a.task_id}: פתח</a>
             ))}
@@ -93,6 +116,8 @@ export function ChatScreen({ ask }: { ask?: string }) {
         <div className="row quick">
           {QUICK.map((q) => <button key={q} type="button" className="chip" disabled={busy || !connected} onClick={() => void send(q)}>{q}</button>)}
         </div>
+        {attaching && <MediaButtons onPick={addFiles} disabled={files.length >= MAX_CHAT_FILES} />}
+        <AttachmentChips files={files} onRemove={(i) => setFiles(files.filter((_, j) => j !== i))} />
         <form className="row" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); void send(text); }}>
           <button
             type="button"
@@ -103,7 +128,8 @@ export function ChatScreen({ ask }: { ask?: string }) {
             onClick={voice.toggle}
           ><Icon name="mic" /></button>
           <input className="field" aria-label="הודעה למתפעל" placeholder={voice.state === "recording" ? `מקליט ${clock(voice.seconds)}…` : voice.state === "transcribing" ? "מתמלל…" : "כתוב הודעה…"} autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
-          <button type="submit" className="iconbtn pri" aria-label="שלח" disabled={busy || !connected || text.trim() === ""}><span style={{ display: "inline-flex", transform: "scaleX(-1)" }}><Icon name="send" size={18} color="#fff" width={2.2} /></span></button>
+          <button type="button" className="iconbtn" aria-label="צרף תמונה או קובץ" aria-expanded={attaching} disabled={busy || !connected} onClick={() => setAttaching((a) => !a)}><Icon name="file" /></button>
+          <button type="submit" className="iconbtn pri" aria-label="שלח" disabled={busy || !connected || (text.trim() === "" && files.length === 0)}><span style={{ display: "inline-flex", transform: "scaleX(-1)" }}><Icon name="send" size={18} color="#fff" width={2.2} /></span></button>
         </form>
       </div>
     </>

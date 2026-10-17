@@ -8,6 +8,7 @@ import { errorText } from "./common";
 export const ACCEPT = "image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv";
 const MAX_BYTES = 15 * 1024 * 1024;
 export const MAX_FILES = 10;
+export const MAX_CHAT_FILES = 5;
 
 export interface Attachment { id: number; name: string; mime: string; size: number }
 
@@ -46,7 +47,7 @@ function Thumb({ file, url }: { file: { name: string; type: string }; url?: stri
 }
 
 /** Camera, image and file buttons. Recording waits for transcription in the core. */
-export function MediaButtons({ onPick, disabled, voice }: { onPick: (files: File[]) => void; disabled?: boolean; voice: { available: boolean; state: "idle" | "recording" | "transcribing"; onToggle: () => void } }) {
+export function MediaButtons({ onPick, disabled, voice }: { onPick: (files: File[]) => void; disabled?: boolean; voice?: { available: boolean; state: "idle" | "recording" | "transcribing"; onToggle: () => void } }) {
   const camera = useRef<HTMLInputElement>(null);
   const image = useRef<HTMLInputElement>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -57,21 +58,21 @@ export function MediaButtons({ onPick, disabled, voice }: { onPick: (files: File
     <input ref={ref} type="file" accept={accept} capture={capture} multiple={!capture} hidden onChange={(e) => { void take(e.target.files); e.target.value = ""; }} />
   );
   return (
-    <div className="media-grid">
+    <div className="media-grid" style={voice ? undefined : { gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
       {hidden(camera, "image/*", "environment")}
       {hidden(image, "image/*")}
       {hidden(file, ACCEPT)}
       <button type="button" className="btn" disabled={disabled} onClick={() => camera.current?.click()}><Icon name="camera" />מצלמה</button>
       <button type="button" className="btn" disabled={disabled} onClick={() => image.current?.click()}><Icon name="image" />תמונה</button>
       <button type="button" className="btn" disabled={disabled} onClick={() => file.current?.click()}><Icon name="file" />קובץ</button>
-      <button
+      {voice && <button
         type="button"
         className={`btn ${voice.state === "recording" ? "recording" : ""} ${voice.available ? "" : "soon"}`}
         disabled={!voice.available || voice.state === "transcribing"}
         aria-pressed={voice.state === "recording"}
         aria-label={voice.available ? undefined : "הקלטה: התמלול לא מותקן במחשב"}
         onClick={voice.onToggle}
-      ><Icon name="mic" />{voice.state === "recording" ? "עצור" : voice.state === "transcribing" ? "מתמלל…" : "הקלטה"}</button>
+      ><Icon name="mic" />{voice.state === "recording" ? "עצור" : voice.state === "transcribing" ? "מתמלל…" : "הקלטה"}</button>}
     </div>
   );
 }

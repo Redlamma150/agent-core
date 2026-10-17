@@ -8,7 +8,7 @@ import type { ActivityService } from "../core/activity.js";
 import { createReadStream, existsSync } from "node:fs";
 import { basename, dirname, join, posix } from "node:path";
 import { LocalActionError, isLocalRequest, type LocalActions } from "../core/local.js";
-import { ALLOWED_MIME, MAX_FILE_BYTES, MediaError, type MediaService } from "../core/media.js";
+import { ALLOWED_MIME, MAX_FILE_BYTES, MediaError, type ChatMediaService, type MediaService } from "../core/media.js";
 import { OperatorBusyError, OperatorFailedError, MAX_HISTORY, MAX_TEXT, type OperatorService } from "../core/operator.js";
 import { AUDIO_MIME, MAX_AUDIO_BYTES, looksLikeAudio, TranscribeError, type TranscribeService } from "../core/transcribe.js";
 import { UnknownInsightError, type InsightService } from "../core/insights.js";
@@ -57,9 +57,10 @@ export interface Services {
   transcribe?: TranscribeService;
   quota?: QuotaService;
   preview?: PreviewService;
+  chatMedia?: ChatMediaService;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings, nightHour = 2, transcribe, quota, preview }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings, nightHour = 2, transcribe, quota, preview, chatMedia }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message, reason: err.reason });
@@ -392,11 +393,20 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   const chatBody = z.object({
     text: z.string().trim().min(1).max(MAX_TEXT),
     history: z.array(z.object({ from: z.enum(["me", "system"]), text: z.string().max(MAX_TEXT) })).max(MAX_HISTORY).optional(),
+    media: z.array(z.number().int().positive()).max(5).optional(),
   });
   /** Free text to the operator agent: answers questions about the system and can start, stop or continue tasks. */
   app.post("/chat", async (req, reply) => {
     if (!operator) return notImplemented(reply, "M11");
     const body = chatBody.parse(req.body);
-    return operator.chat(body.text, body.history);
+    chatMedia?.purge(); // old chat files go as the chat is used
+    return operator.chat(body.text, body.history, body.media);
+  });
+  /** A file for the operator's chat (a photo, a screenshot, a PDF). Sent first; the chat message then refers to it by id. */
+  app.post<{ Querystring: { name?: string } }>("/chat/media", async (req, reply) => {
+    if (!chatMedia) return reply.code(501).send({ error: "not_implemented" });
+    const mime = (req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+    if (!Buffer.isBuffer(req.body)) throw new MediaError("סוג הקובץ לא נתמך. אפשר תמונות, PDF וקבצי טקסט.");
+    return reply.code(201).send(chatMedia.save(req.query.name ?? "file", mime, req.body));
   });
 }
