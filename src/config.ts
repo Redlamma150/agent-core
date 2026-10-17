@@ -39,6 +39,10 @@ const schema = z.object({
   WHISPER_COMMAND: z.string().default("whisper"),
   WHISPER_MODEL: z.string().default("medium"),
   WHISPER_LANGUAGE: z.string().default("he"),
+  /** Test environments: open a task's work on its own port, before it is approved. */
+  PREVIEW: z.enum(["true", "false"], { error: "Env var PREVIEW must be true or false" }).default("true"),
+  /** A test environment closes after this many minutes without use. */
+  PREVIEW_IDLE_MINUTES: positiveInt("PREVIEW_IDLE_MINUTES").default(30),
   /** The hour (0-23, local time) a task scheduled for "tonight" starts. */
   NIGHT_HOUR: z.coerce.number({ error: "Env var NIGHT_HOUR must be a number" }).int().min(0, "Env var NIGHT_HOUR must be 0-23").max(23, "Env var NIGHT_HOUR must be 0-23").default(2),
   /** Take before and after screenshots of the page a task changed, for the approval screen. */

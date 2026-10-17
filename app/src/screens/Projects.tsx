@@ -50,8 +50,33 @@ function OpenButtons({ id }: { id: number }) {
   );
 }
 
+/** How to start the project for a test environment. A shell command, so it can only be set from the computer itself. */
+function DevCommand({ id, value, onSaved }: { id: number; value: string | null; onSaved: () => void }) {
+  const [text, setText] = useState(value ?? "");
+  const { notify } = useUndo();
+  async function save() {
+    try {
+      await api(`/projects/${id}`, { method: "PATCH", body: { dev_command: text.trim() || null } });
+      notify("פקודת ההרצה נשמרה");
+      onSaved();
+    } catch (err) {
+      notify(errorText(err));
+    }
+  }
+  return (
+    <details>
+      <summary className="muted" style={{ minHeight: 44, display: "flex", alignItems: "center" }}>סביבת בדיקה: {value ? "הוגדרה פקודת הרצה" : "עמוד סטטי (בלי פקודה)"}</summary>
+      <div className="group">
+        <label className="muted" htmlFor={`dev-${id}`}>פקודה שמפעילה את האתר. {"{port}"} מוחלף בפורט. עמוד HTML רגיל לא צריך פקודה.</label>
+        <input id={`dev-${id}`} className="field" dir="ltr" placeholder="npm install && npm run dev -- --port {port}" value={text} onChange={(e) => setText(e.target.value)} />
+        <button type="button" className="btn sm" onClick={() => void save()}>שמור (מהמחשב בלבד)</button>
+      </div>
+    </details>
+  );
+}
+
 export function ProjectsScreen() {
-  const projects = useApi<{ id: number; name: string; repo_path: string }[]>("/projects");
+  const projects = useApi<{ id: number; name: string; repo_path: string; dev_command: string | null }[]>("/projects");
   const tasks = useApi<TaskRow[]>("/tasks?view=active");
   const connected = useConnected();
   return (
@@ -67,10 +92,10 @@ export function ProjectsScreen() {
                 <div className="muted path"><bdi className="mono">{p.repo_path}</bdi></div>
                 <div className="row">
                   <a className="btn sm grow" href={`#/new?project=${p.id}`}>משימה חדשה</a>
-                  <button type="button" className="btn sm grow soon" disabled>תצוגה חיה</button>
                   <a className="btn sm grow" aria-disabled={!connected} href={`#/chat?q=${encodeURIComponent(`הצע לי שיפורי עיצוב לפרויקט ${p.name}`)}`}>הצע עיצוב</a>
                 </div>
                 <OpenButtons id={p.id} />
+                <DevCommand id={p.id} value={p.dev_command} onSaved={projects.reload} />
               </div>
             );
           })}

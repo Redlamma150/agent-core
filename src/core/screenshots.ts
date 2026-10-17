@@ -16,35 +16,38 @@ export interface Shooter {
 }
 export type LaunchShooter = () => Promise<Shooter>;
 
-const MIME: Record<string, string> = {
+export const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript",
   ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
   ".webp": "image/webp", ".ico": "image/x-icon", ".woff": "font/woff", ".woff2": "font/woff2", ".txt": "text/plain", ".md": "text/plain",
 };
 
+/** Maps a request path to a file inside `base`: 400 for a bad path, 403 for one that leaves the folder, 404 for a missing file. */
+export function resolveStatic(base: string, url: string): { status: 200; file: string } | { status: 400 | 403 | 404 } {
+  let path: string;
+  try {
+    path = decodeURIComponent(new URL(url, "http://x").pathname);
+  } catch {
+    return { status: 400 };
+  }
+  let file = resolve(base, "." + posix.normalize("/" + path));
+  if (file !== base && !file.startsWith(base + sep)) return { status: 403 };
+  if (existsSync(file) && statSync(file).isDirectory()) file = join(file, "index.html");
+  if (!existsSync(file) || !statSync(file).isFile()) return { status: 404 };
+  return { status: 200, file };
+}
+
 /** Serves one folder on a random localhost port, read only, so a built page can be opened in the browser. */
 export async function serveFolder(root: string): Promise<{ origin: string; close: () => Promise<void> }> {
   const base = resolve(root);
   const server: Server = createServer((req, res) => {
-    let path: string;
-    try {
-      path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
-    } catch {
-      res.writeHead(400).end();
+    const found = resolveStatic(base, req.url ?? "/");
+    if (found.status !== 200) {
+      res.writeHead(found.status).end();
       return;
     }
-    let file = resolve(base, "." + posix.normalize("/" + path));
-    if (file !== base && !file.startsWith(base + sep)) {
-      res.writeHead(403).end();
-      return;
-    }
-    if (existsSync(file) && statSync(file).isDirectory()) file = join(file, "index.html");
-    if (!existsSync(file) || !statSync(file).isFile()) {
-      res.writeHead(404).end();
-      return;
-    }
-    res.writeHead(200, { "content-type": MIME[extname(file).toLowerCase()] ?? "application/octet-stream", "cache-control": "no-store" });
-    res.end(readFileSync(file));
+    res.writeHead(200, { "content-type": MIME[extname(found.file).toLowerCase()] ?? "application/octet-stream", "cache-control": "no-store" });
+    res.end(readFileSync(found.file));
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
   const { port } = server.address() as { port: number };

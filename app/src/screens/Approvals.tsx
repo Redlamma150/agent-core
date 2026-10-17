@@ -6,7 +6,7 @@ import { AiBadge, Icon, InnerBar, Sheet, Soon, StatusPill, TopBar } from "../ui"
 import { useUndo, type MergeFailure } from "../undo";
 import { coreMessage, errorText, State } from "./common";
 import { clock, useVoice, useVoiceAvailable } from "../lib/voice";
-import { PreviewFrame, useShots } from "./Preview";
+import { LiveEnvironment, PreviewFrame, useShots } from "./Preview";
 
 export interface ApprovalRow {
   id: number;
@@ -147,6 +147,8 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
             ))}
           </div>
         )}
+
+        <LiveEnvironment taskId={a.task_id} />
 
         {shots.size > 0 && (
           <div className="card">

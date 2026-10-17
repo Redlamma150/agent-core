@@ -7,7 +7,7 @@ import { AiBadge, InnerBar, Sheet, StatusPill, Stepper } from "../ui";
 import { useUndo } from "../undo";
 import { errorText, State } from "./common";
 import { TaskGallery } from "./media";
-import { PreviewFrame, useShots } from "./Preview";
+import { LiveEnvironment, PreviewFrame, useShots } from "./Preview";
 
 interface ActivityRow { id: number; agent: string; tool: string; target: string | null; created_at: string }
 interface StepRow { id: number; agent: string; status: string; from_status: string | null; to_status: string | null; summary: string | null; created_at: string }
@@ -196,6 +196,8 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
           </div>
         </>
       )}
+
+      {tab === "preview" && !["merged"].includes(t.status) && !trashed && <LiveEnvironment taskId={t.id} />}
 
       {tab === "preview" && (shots.size > 0 ? (
         <>
