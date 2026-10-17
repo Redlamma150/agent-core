@@ -156,8 +156,15 @@ export class GitService {
 
   /** The commit that merged a task into the base branch (merges are always `Merge task-<id>`), or null if it cannot be found. */
   async findMerge(repoPath: string, taskId: number): Promise<string | null> {
-    const out = await simpleGit(repoPath).raw(["log", "--merges", "-1", "--format=%H", "--fixed-strings", `--grep=Merge task-${taskId}`]).catch(() => "");
+    // Anchored: "Merge task-1" must not match "Merge task-12".
+    const out = await simpleGit(repoPath).raw(["log", "--merges", "-1", "--format=%H", `--grep=^Merge task-${taskId}$`]).catch(() => "");
     return out.trim() || null;
+  }
+
+  /** Task numbers merged after the given commit, newest first, for explaining why an older merge cannot be undone alone. */
+  private async mergedAfter(repoPath: string, commit: string): Promise<number[]> {
+    const out = await simpleGit(repoPath).raw(["log", "--merges", "--format=%s", `${commit}..HEAD`]).catch(() => "");
+    return out.split("\n").map((s) => /^Merge task-(\d+)$/.exec(s)?.[1]).filter((n): n is string => n !== undefined).map(Number);
   }
 
   /**
@@ -181,7 +188,13 @@ export class GitService {
     if (failure === null && (await git.status()).conflicted.length > 0) failure = "conflicting changes";
     if (failure !== null) {
       await git.raw(["revert", "--abort"]).catch(() => undefined);
-      throw new MergeError(`ההחזרה נכשלה (${failure}). ייתכן שקבצים אלה השתנו מאז המיזוג.`, "conflict");
+      const later = await this.mergedAfter(repoPath, commit);
+      throw new MergeError(
+        later.length > 0
+          ? `אי אפשר להחזיר את המיזוג הזה, כי משימות שמוזגו אחריו (${later.map((n) => `#${n}`).join(", ")}) שינו את אותם קבצים. החזר קודם את ${later.length === 1 ? "משימה" : "המשימות"} ${later.map((n) => `#${n}`).join(", ")}, ואז את הזאת.`
+          : `ההחזרה נכשלה (${failure}). ייתכן שקבצים אלה השתנו מאז המיזוג.`,
+        "conflict",
+      );
     }
     return (await git.revparse(["HEAD"])).trim();
   }

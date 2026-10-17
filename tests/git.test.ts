@@ -177,6 +177,36 @@ describe("GitService", () => {
       expect(readFileSync(join(repo, "new.txt"), "utf8")).toBe("from task\n");
     });
 
+    it("explains that a later merge must be undone first when it touched the same files", async () => {
+      const { repo, git } = await makeRepo();
+      const one = await git.prepare(repo, 1);
+      writeFileSync(join(one.worktree, "page.txt"), "v1\n");
+      await git.commitAll(one.worktree, "task 1");
+      await git.merge(repo, 1, "main");
+      const two = await git.prepare(repo, 2);
+      writeFileSync(join(two.worktree, "page.txt"), "v2\n");
+      await git.commitAll(two.worktree, "task 2 fixes task 1");
+      await git.merge(repo, 2, "main");
+
+      const first = (await git.findMerge(repo, 1))!;
+      await expect(git.revert(repo, first, "main")).rejects.toThrow(/#2/);
+      expect((await simpleGit(repo).status()).isClean()).toBe(true); // the failed revert left nothing behind
+      // in the right order it works
+      await git.revert(repo, (await git.findMerge(repo, 2))!, "main");
+      await git.revert(repo, first, "main");
+      expect(existsSync(join(repo, "page.txt"))).toBe(false);
+    });
+
+    it("does not mistake task 12 for task 1 when looking for a merge", async () => {
+      const { repo, git } = await makeRepo();
+      const p = await git.prepare(repo, 12);
+      writeFileSync(join(p.worktree, "a.txt"), "x\n");
+      await git.commitAll(p.worktree, "task 12");
+      await git.merge(repo, 12, "main");
+      expect(await git.findMerge(repo, 1)).toBeNull();
+      expect(await git.findMerge(repo, 12)).toMatch(/^[0-9a-f]{40}$/);
+    });
+
     it("finds no merge for a task that was never merged, and refuses on unsaved changes or the wrong branch", async () => {
       const { repo, git } = await makeRepo();
       expect(await git.findMerge(repo, 99)).toBeNull();
