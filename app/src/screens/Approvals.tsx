@@ -163,7 +163,7 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
       </div>
       <div className="bar-fixed">
         <button type="button" className="btn pri big" disabled={!connected} onClick={() => approveAndLeave()}><Icon name="check" color="#fff" width={2.6} />אשר ומזג</button>
-        <button type="button" className="btn" disabled={!connected} onClick={() => setRejecting(true)}>דחה עם הערה</button>
+        <button type="button" className="btn" disabled={!connected} onClick={() => setRejecting(true)}>בקש תיקון (דחה עם הערה)</button>
       </div>
       {rejecting && (
         <RejectSheet

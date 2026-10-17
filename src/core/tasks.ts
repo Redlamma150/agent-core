@@ -53,6 +53,8 @@ export interface Task {
   reverted_at: string | null;
   /** UTC time ("YYYY-MM-DD HH:MM:SS") a scheduled task is waiting for. Null once it starts. */
   scheduled_for: string | null;
+  /** The merged task this one continues (a follow-up), or null. */
+  parent_task_id: number | null;
   /** "quota" while the task waits for the subscription quota to come back; null otherwise. */
   pause_reason: string | null;
   token_extra: number;
@@ -63,7 +65,7 @@ export interface Task {
 /** SQLite's own UTC text format, which the rest of the schema uses. */
 export const sqliteTime = (d: Date): string => d.toISOString().slice(0, 19).replace("T", " ");
 
-const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, reverted_at, scheduled_for, pause_reason, token_extra, created_at, updated_at";
+const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, reverted_at, scheduled_for, pause_reason, parent_task_id, token_extra, created_at, updated_at";
 
 export class TaskService {
   constructor(private db: Db, private bus?: EventBus) {}
@@ -131,6 +133,19 @@ export class TaskService {
   clearSchedule(id: number): void {
     this.db.prepare("UPDATE tasks SET scheduled_for = NULL, pause_reason = NULL WHERE id = ?").run(id);
     this.changed(id);
+  }
+
+  /**
+   * A new task that continues a merged one: same project, the owner's note as its text, and a link to the original so
+   * the agents get its context. It branches from the current base branch, which already holds the original's changes.
+   */
+  createFollowUp(parentId: number, note: string): Task {
+    const parent = this.get(parentId);
+    if (parent.status !== "merged") throw new InvalidActionError("only a merged task can be continued with a follow-up");
+    const task = this.create(parent.project_id, note, parent.flagged === 1);
+    this.db.prepare("UPDATE tasks SET parent_task_id = ? WHERE id = ?").run(parentId, task.id);
+    this.note(task.id, "follow_up", `המשך למשימה #${parentId}`);
+    return this.get(task.id);
   }
 
   /** A task created to start when the quota comes back is marked like one the quota paused, so the app says so. */

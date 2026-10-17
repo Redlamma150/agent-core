@@ -231,7 +231,7 @@ export class Pipeline implements TaskDriver {
       taskId: task.id,
       role: "planner",
       systemPrompt: loadTemplate("planner"),
-      prompt: `Task ${task.id}: ${task.description}\n\nThe project "${project.name}" is your current directory. Plan this task.${notes ? `\n\nA note from the owner: ${notes}` : ""}${projectContext(project)}${this.attachmentsNote(task.id)}`,
+      prompt: `Task ${task.id}: ${task.description}\n\nThe project "${project.name}" is your current directory. Plan this task.${notes ? `\n\nA note from the owner: ${notes}` : ""}${projectContext(project)}${this.followUpNote(task)}${this.attachmentsNote(task.id)}`,
       cwd: project.repo_path,
       extraDirs: this.attachmentDirs(task.id),
       tools: PLANNER_TOOLS,
@@ -260,6 +260,8 @@ export class Pipeline implements TaskDriver {
     parts.push("Your current directory is the task's git worktree. Implement the task there.");
     const context = projectContext(project);
     if (context) parts.push(context.trim());
+    const followUp = this.followUpNote(task).trim();
+    if (followUp) parts.push(followUp);
     const attached = this.attachmentsNote(task.id).trim();
     if (attached) parts.push(attached);
 
@@ -353,6 +355,17 @@ export class Pipeline implements TaskDriver {
     if (changes.length === 0) return;
     this.d.db.prepare("DELETE FROM steps WHERE task_id = ? AND status = 'files_changed'").run(taskId);
     this.d.db.prepare("INSERT INTO steps (task_id, agent, status, summary, handoff) VALUES (?, 'system', 'files_changed', ?, ?)").run(taskId, `${changes.length} קבצים`, JSON.stringify(changes));
+  }
+
+  /** For a follow-up: what the original task did, so the agents continue it instead of starting blind. */
+  private followUpNote(task: Task): string {
+    if (!task.parent_task_id) return "";
+    const parent = this.d.tasks.get(task.parent_task_id);
+    const approval = this.d.db.prepare("SELECT request_text FROM approvals WHERE task_id = ? ORDER BY id DESC LIMIT 1").get(parent.id) as { request_text: string } | undefined;
+    const lines = [`\n\nThis task continues task ${parent.id}, which is already merged into the project (its changes are in your current directory). Task ${parent.id} was: ${parent.description}`];
+    if (approval) lines.push(`What was done and which files changed, from its approval request:\n${approval.request_text.slice(0, 3000)}`);
+    lines.push("The text of this task is the owner's follow-up: what is still wrong or missing. Change only what it asks for.");
+    return lines.join("\n\n");
   }
 
   /** Lists the owner's attached files for the agent's prompt. Paths only; the agent opens them with Read. */

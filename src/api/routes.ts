@@ -22,7 +22,7 @@ const notImplemented = (reply: FastifyReply, milestone: string) =>
   reply.code(501).send({ error: "not_implemented", milestone });
 
 const TASK_COLUMNS =
-  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.scheduled_for, t.pause_reason, t.created_at, t.updated_at";
+  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.scheduled_for, t.pause_reason, t.parent_task_id, t.created_at, t.updated_at";
 const TASK_FROM = "FROM tasks t JOIN projects p ON p.id = t.project_id";
 /** Why a blocked or stopped task stopped: the summary of the step that moved it there. */
 /** The model that did the task's work: the builder's latest call, otherwise any latest call. Always a Claude model for now. */
@@ -36,6 +36,7 @@ const VIEWS: Record<string, string> = {
 
 const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional(), when: z.enum(["now", "night", "quota"]).optional() });
 const editTaskBody = z.object({ title: z.string().trim().min(1).max(80).optional(), description: z.string().trim().min(1).max(5000).optional() }).refine((b) => b.title !== undefined || b.description !== undefined, "nothing to change");
+const followUpBody = z.object({ note: z.string().trim().min(1).max(5000) });
 const continueBody = z.object({ note: z.string().trim().max(5000).optional() });
 const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z.string().max(5000).optional(), stash: z.boolean().optional() });
 
@@ -244,6 +245,14 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
       return oneTask(id);
     });
   }
+  // A merged task that is not quite right: a new task that continues it, with what to fix.
+  app.post<{ Params: { id: string } }>("/tasks/:id/followup", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    const task = tasks.createFollowUp(id, followUpBody.parse(req.body).note);
+    driver.start(task.id);
+    return reply.code(201).send(oneTask(task.id));
+  });
   app.post<{ Params: { id: string } }>("/tasks/:id/duplicate", async (req, reply) => {
     const id = taskId(req.params.id);
     if (id === null) return reply.code(400).send({ error: "invalid_id" });

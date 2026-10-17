@@ -49,6 +49,8 @@ export interface TaskRow {
   scheduled_for: string | null;
   /** "quota" while the task waits for the subscription quota. */
   pause_reason: string | null;
+  /** The merged task this one continues. */
+  parent_task_id: number | null;
   created_at: string;
   updated_at: string;
 }
