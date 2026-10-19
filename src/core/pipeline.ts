@@ -144,7 +144,7 @@ export class Pipeline implements TaskDriver {
   duplicate(taskId: number): Task {
     const { tasks } = this.d;
     const source = tasks.get(taskId);
-    const copy = tasks.create(source.project_id, source.description, source.flagged === 1);
+    const copy = tasks.create(source.project_id, source.description, source.flagged === 1, null, source.review_plan === 1);
     this.start(copy.id);
     return copy;
   }
@@ -154,6 +154,12 @@ export class Pipeline implements TaskDriver {
     const { tasks, approvals, git } = this.d;
     const approval = approvals.get(approvalId);
     const task = tasks.get(approval.task_id);
+    // A plan: approving starts the build, sending it back (with a note) plans again. Nothing to merge.
+    if (approval.kind === "plan") {
+      const resolved = approvals.resolve(approvalId, approve, note);
+      this.start(task.id, approve ? undefined : note);
+      return resolved;
+    }
     let warning: string | undefined;
     if (approve && approval.status === "pending") {
       if (!task.base_branch) throw new Error(`task ${task.id} has no base branch recorded`);
@@ -219,6 +225,7 @@ export class Pipeline implements TaskDriver {
     if (task.status === "planning") {
       plan = await this.plan(task, signal, notes);
       if (!plan) return; // blocked or stopped; already recorded
+      if (task.review_plan === 1) return void this.requestPlanReview(task, plan); // the owner approves the plan first
       task = tasks.transition(taskId, "in_progress", "plan ready");
     }
     plan ??= this.savedPlan(taskId);
@@ -357,6 +364,15 @@ export class Pipeline implements TaskDriver {
     this.d.db.prepare("INSERT INTO steps (task_id, agent, status, summary, handoff) VALUES (?, 'system', 'files_changed', ?, ?)").run(taskId, `${changes.length} קבצים`, JSON.stringify(changes));
   }
 
+  /** Shows the owner the plan and waits: the task is parked in `awaiting_approval` until the plan is approved or sent back. */
+  private requestPlanReview(task: Task, plan: Handoff): void {
+    const lines = [`התוכנית של המתכנן למשימה #${task.id}:`, plan.summary];
+    if (plan.open_items.length > 0) lines.push(`שלבי הביצוע:\n${plan.open_items.map((s, i) => `${i + 1}. ${s}`).join("\n")}`);
+    if (plan.artifacts.length > 0) lines.push(`קבצים שצפויים להשתנות:\n${plan.artifacts.join("\n")}`);
+    if (plan.needs_approval) lines.push("המתכנן סימן את המשימה כרגישה או מסוכנת, כדאי לקרוא את התוכנית היטב.");
+    this.d.approvals.request(task.id, lines.join("\n\n"), new Date(), "plan");
+  }
+
   /** For a follow-up: what the original task did, so the agents continue it instead of starting blind. */
   private followUpNote(task: Task): string {
     if (!task.parent_task_id) return "";
@@ -391,7 +407,7 @@ export class Pipeline implements TaskDriver {
   }
 
   private lastRejectionNote(taskId: number): string | undefined {
-    const row = this.d.db.prepare("SELECT notes FROM approvals WHERE task_id = ? AND status = 'rejected' ORDER BY id DESC LIMIT 1").get(taskId) as { notes: string | null } | undefined;
+    const row = this.d.db.prepare("SELECT notes FROM approvals WHERE task_id = ? AND status = 'rejected' AND kind = 'work' ORDER BY id DESC LIMIT 1").get(taskId) as { notes: string | null } | undefined;
     return row?.notes ?? undefined;
   }
 

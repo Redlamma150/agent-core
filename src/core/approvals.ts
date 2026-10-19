@@ -8,6 +8,8 @@ export interface Approval {
   id: number;
   task_id: number;
   request_text: string;
+  /** "plan": the planner's plan, before anything is built. "work": the finished change, before it is merged. */
+  kind: "plan" | "work";
   status: "pending" | "approved" | "rejected";
   reminders_sent: number;
   notes: string | null;
@@ -30,10 +32,10 @@ export class ApprovalService {
   }
 
   /** Asks the owner for approval and parks the task in `awaiting_approval`. */
-  request(taskId: number, requestText: string, now = new Date()): Approval {
+  request(taskId: number, requestText: string, now = new Date(), kind: "plan" | "work" = "work"): Approval {
     const create = this.db.transaction(() => {
       this.tasks.transition(taskId, "awaiting_approval", requestText);
-      const info = this.db.prepare("INSERT INTO approvals (task_id, request_text, created_at) VALUES (?, ?, ?)").run(taskId, requestText, now.toISOString());
+      const info = this.db.prepare("INSERT INTO approvals (task_id, request_text, created_at, kind) VALUES (?, ?, ?, ?)").run(taskId, requestText, now.toISOString(), kind);
       return Number(info.lastInsertRowid);
     });
     const approval = this.get(create());
@@ -41,7 +43,10 @@ export class ApprovalService {
     return approval;
   }
 
-  /** Approve moves the task to `merged` (the actual git merge arrives in M6); reject sends it back to `in_progress` with the notes. */
+  /**
+   * Work: approve moves the task to `merged` (the git merge itself is done by the pipeline), reject sends it back to
+   * `in_progress` with the notes. Plan: approve starts the build (`in_progress`), reject goes back to `planning`.
+   */
   resolve(id: number, approved: boolean, notes?: string, now = new Date()): Approval {
     const run = this.db.transaction(() => {
       const a = this.get(id);
@@ -50,7 +55,12 @@ export class ApprovalService {
         .prepare("UPDATE approvals SET status = ?, notes = ?, resolved_at = ? WHERE id = ? AND status = 'pending'")
         .run(approved ? "approved" : "rejected", notes ?? null, now.toISOString(), id);
       if (res.changes !== 1) throw new Error(`Approval ${id} was resolved concurrently`);
-      this.tasks.transition(a.task_id, approved ? "merged" : "in_progress", approved ? "approved" : `rejected: ${notes ?? ""}`.trim());
+      const plan = a.kind === "plan";
+      this.tasks.transition(
+        a.task_id,
+        approved ? (plan ? "in_progress" : "merged") : plan ? "planning" : "in_progress",
+        approved ? (plan ? "plan approved" : "approved") : `${plan ? "plan " : ""}rejected: ${notes ?? ""}`.trim(),
+      );
     });
     run();
     const resolved = this.get(id);

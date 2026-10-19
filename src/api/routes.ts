@@ -24,7 +24,7 @@ const notImplemented = (reply: FastifyReply, milestone: string) =>
   reply.code(501).send({ error: "not_implemented", milestone });
 
 const TASK_COLUMNS =
-  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.scheduled_for, t.pause_reason, t.parent_task_id, t.created_at, t.updated_at";
+  "t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.branch, t.tokens_used, t.token_extra, t.flagged, t.archived_at, t.deleted_at, t.reverted_at, t.scheduled_for, t.pause_reason, t.parent_task_id, t.review_plan, t.created_at, t.updated_at";
 const TASK_FROM = "FROM tasks t JOIN projects p ON p.id = t.project_id";
 /** Why a blocked or stopped task stopped: the summary of the step that moved it there. */
 /** The model that did the task's work: the builder's latest call, otherwise any latest call. Always a Claude model for now. */
@@ -36,7 +36,7 @@ const VIEWS: Record<string, string> = {
   trash: "t.deleted_at IS NOT NULL",
 };
 
-const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional(), when: z.enum(["now", "night", "quota"]).optional() });
+const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional(), review_plan: z.boolean().optional(), when: z.enum(["now", "night", "quota"]).optional() });
 const editTaskBody = z.object({ title: z.string().trim().min(1).max(80).optional(), description: z.string().trim().min(1).max(5000).optional() }).refine((b) => b.title !== undefined || b.description !== undefined, "nothing to change");
 const followUpBody = z.object({ note: z.string().trim().min(1).max(5000) });
 const continueBody = z.object({ note: z.string().trim().max(5000).optional() });
@@ -236,7 +236,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
     // "When the quota comes back" waits for the next reset of the 5 hour window; when none is known there is nothing to wait for.
     const reset = body.when === "quota" ? quota?.nextReset() ?? null : null;
     const night = body.when === "night" || reset !== null;
-    const task = tasks.create(body.project_id, body.description, body.flagged, body.when === "night" ? nextNight(new Date(), nightHour) : reset ? new Date(reset.getTime() + RESUME_MARGIN_MS) : null);
+    const task = tasks.create(body.project_id, body.description, body.flagged, body.when === "night" ? nextNight(new Date(), nightHour) : reset ? new Date(reset.getTime() + RESUME_MARGIN_MS) : null, body.review_plan === true);
     if (reset) tasks.markQuotaWait(task.id);
     // `hold`: the app attaches files first and then starts the task, so the agent sees them from its first step.
     // A night task is never started here: the scheduler starts it when its time comes.
@@ -330,7 +330,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   });
 
   app.get("/approvals", async () =>
-    db.prepare("SELECT id, task_id, request_text, status, reminders_sent, created_at FROM approvals WHERE status = 'pending' ORDER BY id").all(),
+    db.prepare("SELECT id, task_id, kind, request_text, status, reminders_sent, created_at FROM approvals WHERE status = 'pending' ORDER BY id").all(),
   );
   app.post<{ Params: { id: string } }>("/approvals/:id", async (req, reply) => {
     if (!/^\d+$/.test(req.params.id)) return reply.code(400).send({ error: "invalid_id" });

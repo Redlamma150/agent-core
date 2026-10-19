@@ -198,6 +198,70 @@ describe("pipeline", () => {
     expect(() => t.tasks.createFollowUp(t.task.id, "fix")).toThrow(/only a merged task/);
   });
 
+  describe("plan review", () => {
+    const planWith = (call: Call, over: Record<string, unknown> = {}) => handoff(Number(/Task (\d+)/.exec(call.prompt)?.[1]), "planner", { summary: "אשנה את הכותרת ואוסיף כפתור", open_items: ["לערוך את index.html", "להוסיף כפתור"], artifacts: ["index.html"], ...over });
+
+    it("parks the task on its plan and builds only after the owner approves it", async () => {
+      const t = await setup({ planner: (c) => planWith(c) });
+      t.db.prepare("UPDATE tasks SET review_plan = 1 WHERE id = ?").run(t.task.id);
+      t.pipeline.start(t.task.id);
+      await t.pipeline.idle();
+
+      expect(t.calls.map((c) => c.role)).toEqual(["planner"]); // the builder has not started
+      expect(t.tasks.get(t.task.id).status).toBe("awaiting_approval");
+      const [plan] = t.approvals.pending();
+      expect(plan).toMatchObject({ kind: "plan" });
+      expect(plan!.request_text).toContain("אשנה את הכותרת");
+      expect(plan!.request_text).toContain("1. לערוך את index.html");
+      expect(plan!.request_text).toContain("index.html");
+      expect(await simpleGit(t.repo).raw(["branch", "--list", "task-1"])).toBe(""); // nothing was prepared yet
+
+      await t.pipeline.resolveApproval(plan!.id, true);
+      await t.pipeline.idle();
+      expect(t.calls.map((c) => c.role)).toEqual(["planner", "builder"]); // the same plan, no second planning
+      expect(t.tasks.get(t.task.id).status).toBe("awaiting_approval");
+      expect(t.approvals.pending()).toMatchObject([{ kind: "work" }]); // and now the finished work waits for approval
+      expect(t.calls[1]!.prompt).toContain("אשנה את הכותרת"); // the builder got the approved plan
+    });
+
+    it("plans again with the owner's note when the plan is sent back, and keeps that note away from the builder", async () => {
+      const t = await setup({ planner: (c) => planWith(c) });
+      t.db.prepare("UPDATE tasks SET review_plan = 1 WHERE id = ?").run(t.task.id);
+      t.pipeline.start(t.task.id);
+      await t.pipeline.idle();
+      await t.pipeline.resolveApproval(t.approvals.pending()[0]!.id, false, "בלי כפתור, רק כותרת");
+      await t.pipeline.idle();
+
+      expect(t.calls.map((c) => c.role)).toEqual(["planner", "planner"]);
+      expect(t.calls[1]!.prompt).toContain("בלי כפתור, רק כותרת");
+      const second = t.approvals.pending();
+      expect(second).toHaveLength(1);
+      expect(second[0]).toMatchObject({ kind: "plan" });
+      expect(t.tasks.get(t.task.id).status).toBe("awaiting_approval");
+
+      await t.pipeline.resolveApproval(second[0]!.id, true);
+      await t.pipeline.idle();
+      const builder = t.calls.find((c) => c.role === "builder")!;
+      expect(builder.prompt).not.toContain("rejected the previous attempt"); // a plan note is not a rejection of built work
+      expect(builder.prompt).not.toContain("בלי כפתור, רק כותרת");
+    });
+
+    it("does not ask when the owner did not want a plan review", async () => {
+      const t = await setup();
+      t.pipeline.start(t.task.id);
+      await t.pipeline.idle();
+      expect(t.calls.map((c) => c.role)).toEqual(["planner", "builder"]);
+      expect(t.approvals.pending()).toMatchObject([{ kind: "work" }]);
+    });
+
+    it("a duplicate keeps the plan review choice", async () => {
+      const t = await setup();
+      t.db.prepare("UPDATE tasks SET review_plan = 1 WHERE id = ?").run(t.task.id);
+      expect(t.pipeline.duplicate(t.task.id).review_plan).toBe(1);
+      await t.pipeline.idle();
+    });
+  });
+
   it("approve with stash merges over the owner's unsaved changes and keeps them", async () => {
     const t = await setup();
     t.pipeline.start(t.task.id);

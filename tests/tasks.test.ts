@@ -11,7 +11,7 @@ const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   received: ["planning", "blocked", "stopped"],
   planning: ["in_progress", "awaiting_approval", "blocked", "stopped"],
   in_progress: ["awaiting_approval", "blocked", "stopped"],
-  awaiting_approval: ["in_progress", "merged", "blocked", "stopped"],
+  awaiting_approval: ["planning", "in_progress", "merged", "blocked", "stopped"], // planning: the owner sent a plan back
   blocked: ["planning", "in_progress", "stopped"],
   merged: [],
   stopped: ["planning", "in_progress"],

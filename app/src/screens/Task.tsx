@@ -11,7 +11,7 @@ import { LiveEnvironment, PreviewFrame, useShots } from "./Preview";
 
 interface ActivityRow { id: number; agent: string; tool: string; target: string | null; created_at: string }
 interface StepRow { id: number; agent: string; status: string; from_status: string | null; to_status: string | null; summary: string | null; created_at: string }
-interface ApprovalRow { id: number; task_id: number; request_text: string; reminders_sent: number; created_at: string }
+interface ApprovalRow { id: number; task_id: number; kind: "plan" | "work"; request_text: string; reminders_sent: number; created_at: string }
 
 type Act = (path: string, method?: string, body?: unknown) => Promise<void>;
 const TABS = [["overview", "סקירה"], ["preview", "תצוגה"], ["gallery", "גלריה"], ["history", "היסטוריה"]] as const;
@@ -78,7 +78,8 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
   }
 
   const approval = approvals.data?.find((a) => a.task_id === t.id);
-  const stage = stageOf(t.status, (steps.data ?? []).map((s) => s.to_status));
+  const planReview = t.status === "awaiting_approval" && approval?.kind === "plan";
+  const stage = planReview ? 0 : stageOf(t.status, (steps.data ?? []).map((s) => s.to_status));
   const running = !t.scheduled_for && (RUNNING.has(t.status) || t.status === "received");
   const trashed = t.deleted_at !== null;
   const canEdit = ["blocked", "stopped"].includes(t.status);
@@ -86,7 +87,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
   return (
     <div className="body">
       <div className="group">
-        <StatusPill status={t.status} reverted={!!t.reverted_at} paused={waitsForQuota(t)} />
+        <StatusPill status={t.status} label={planReview ? "תוכנית ממתינה לאישור" : undefined} reverted={!!t.reverted_at} paused={waitsForQuota(t)} />
         <h1 className="h1s">{taskTitle(t)}</h1>
         <div className="row wrap"><AiBadge model={t.ai} /><span className="muted"><bdi>{t.project_name}</bdi> · {formatNumber(t.tokens_used)} טוקנים</span></div>
       </div>
@@ -150,9 +151,9 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
 
       {!trashed && t.status === "awaiting_approval" && approval && (
         <div className="card strong">
-          <div className="ttl">מחכה להחלטה שלך</div>
+          <div className="ttl">{planReview ? "התוכנית מחכה לאישור שלך" : "מחכה להחלטה שלך"}</div>
           <p className="txt pre clamp2">{approval.request_text}</p>
-          <a className="btn pri" href={`#/approvals/${approval.id}`}>לבקשת האישור</a>
+          <a className="btn pri" href={`#/approvals/${approval.id}`}>{planReview ? "לתוכנית" : "לבקשת האישור"}</a>
         </div>
       )}
 
