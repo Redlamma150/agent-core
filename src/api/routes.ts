@@ -6,12 +6,14 @@ import { MergeError } from "../core/git.js";
 import type { TaskDriver } from "../core/pipeline.js";
 import type { ActivityService } from "../core/activity.js";
 import { createReadStream, existsSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, dirname, join, posix } from "node:path";
 import { LocalActionError, isLocalRequest, type LocalActions } from "../core/local.js";
 import { ALLOWED_MIME, MAX_FILE_BYTES, MediaError, type MediaService } from "../core/media.js";
 import { OperatorBusyError, OperatorFailedError, MAX_HISTORY, MAX_TEXT, type OperatorService } from "../core/operator.js";
 import { AUDIO_MIME, MAX_AUDIO_BYTES, looksLikeAudio, TranscribeError, type TranscribeService } from "../core/transcribe.js";
 import { UnknownInsightError, type InsightService } from "../core/insights.js";
+import { PreviewError, type PreviewInfo, type PreviewService } from "../core/preview.js";
+import { findEntry } from "../core/screenshots.js";
 import { RESUME_MARGIN_MS, type QuotaService } from "../core/quota.js";
 import { nextNight } from "../core/scheduler.js";
 import { registerProject } from "../core/projects.js";
@@ -54,9 +56,10 @@ export interface Services {
   settings?: SettingsService;
   transcribe?: TranscribeService;
   quota?: QuotaService;
+  preview?: PreviewService;
 }
 
-export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings, nightHour = 2, transcribe, quota }: Services): void {
+export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, activity, media, local, operator, insights, settings, nightHour = 2, transcribe, quota, preview }: Services): void {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFoundError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MergeError) return reply.code(409).send({ error: "merge_failed", message: err.message, reason: err.reason });
@@ -66,6 +69,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
       _req.log.error({ err: err.message.slice(0, 200) }, "operator failed");
       return reply.code(502).send({ error: "operator_failed", message: "המתפעל לא הצליח לענות. נסה שוב." });
     }
+    if (err instanceof PreviewError) return reply.code(422).send({ error: "preview_failed", message: err.message });
     if (err instanceof TranscribeError) return reply.code(422).send({ error: "transcribe_failed", message: err.message });
     if (err instanceof UnknownInsightError) return reply.code(404).send({ error: "not_found" });
     if (err instanceof MediaError) return reply.code(400).send({ error: "media", message: err.message });
@@ -87,7 +91,7 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
     if (!where) return reply.code(400).send({ error: "invalid_view" });
     return db.prepare(`SELECT ${TASK_COLUMNS}, ${REASON}, ${AI} ${TASK_FROM} WHERE ${where} ORDER BY t.id DESC LIMIT 200`).all();
   });
-  app.get("/projects", async () => db.prepare("SELECT id, name, repo_path FROM projects ORDER BY name").all());
+  app.get("/projects", async () => db.prepare("SELECT id, name, repo_path, dev_command FROM projects ORDER BY name").all());
 
   // ---- things that only work from this computer itself (not from the phone) ----------------------------------------
   const localOnly = (req: FastifyRequest, reply: FastifyReply): boolean => {
@@ -127,6 +131,16 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
     if (!localOnly(req, reply)) return;
     return { path: await local!.pickFolder() };
   });
+  /** The command that starts the project for a test environment. Runs in a shell, so only the computer itself may set it. */
+  app.patch<{ Params: { id: string } }>("/projects/:id", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    if (!localOnly(req, reply)) return;
+    const body = z.object({ dev_command: z.string().trim().max(300).nullable() }).parse(req.body);
+    const res = db.prepare("UPDATE projects SET dev_command = ? WHERE id = ?").run(body.dev_command || null, id);
+    if (res.changes === 0) return reply.code(404).send({ error: "not_found" });
+    return db.prepare("SELECT id, name, repo_path, dev_command FROM projects WHERE id = ?").get(id);
+  });
   app.post("/projects", async (req, reply) => {
     if (!localOnly(req, reply)) return;
     const body = z.object({ path: z.string().trim().min(1), name: z.string().trim().min(1).max(60).optional(), test_command: z.string().trim().max(200).optional() }).parse(req.body);
@@ -141,6 +155,38 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   // ---- attachments -------------------------------------------------------------------------------------------------
   // Raw bytes in the body, the file name in ?name=. One request per file.
   app.addContentTypeParser([...ALLOWED_MIME], { parseAs: "buffer", bodyLimit: MAX_FILE_BYTES }, (_req, body, done) => done(null, body));
+  // ---- test environment: the task's unmerged work, opened on its own port --------------------------------------------
+  const previewJson = (p: PreviewInfo | null) => (p
+    ? { running: true, kind: p.kind, urls: p.hosts.map((h) => `http://${h}:${p.port}${p.path}?t=${p.token}`), expires_at: p.expiresAt.toISOString() }
+    : { running: false });
+  app.get<{ Params: { id: string } }>("/tasks/:id/preview", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    tasks.get(id);
+    return previewJson(preview?.get(id) ?? null);
+  });
+  app.post<{ Params: { id: string } }>("/tasks/:id/preview", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    if (!preview) return reply.code(501).send({ error: "not_implemented" });
+    tasks.get(id);
+    const where = driver.locate(id);
+    if (where.kind !== "worktree" || !where.exists) throw new PreviewError("אין עותק עבודה של המשימה (היא עדיין לא נבנתה, או שכבר מוזגה), ולכן אין מה להריץ.");
+    const project = db.prepare("SELECT p.dev_command FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?").get(id) as { dev_command: string | null };
+    if (project.dev_command) return previewJson(await preview.start(id, { root: where.path, devCommand: project.dev_command }));
+    const row = db.prepare("SELECT handoff FROM steps WHERE task_id = ? AND status = 'files_changed' ORDER BY id DESC LIMIT 1").get(id) as { handoff: string } | undefined;
+    const changed = row ? (JSON.parse(row.handoff) as { path: string }[]).map((c) => c.path) : [];
+    const entry = findEntry(where.path, changed);
+    if (!entry) throw new PreviewError("אין עמוד HTML להצגה בפרויקט, ולא הוגדרה לו פקודת הרצה. אפשר להגדיר אותה במסך הפרויקטים (מהמחשב).");
+    const page = posix.basename(entry);
+    return previewJson(await preview.start(id, { root: join(where.path, dirname(entry)), path: page === "index.html" ? "/" : `/${page}` }));
+  });
+  app.delete<{ Params: { id: string } }>("/tasks/:id/preview", async (req, reply) => {
+    const id = taskId(req.params.id);
+    if (id === null) return reply.code(400).send({ error: "invalid_id" });
+    await preview?.stop(id);
+    return reply.code(204).send();
+  });
   app.get<{ Params: { id: string } }>("/tasks/:id/changes", async (req, reply) => {
     const id = taskId(req.params.id);
     if (id === null) return reply.code(400).send({ error: "invalid_id" });
@@ -288,7 +334,9 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   app.post<{ Params: { id: string } }>("/approvals/:id", async (req, reply) => {
     if (!/^\d+$/.test(req.params.id)) return reply.code(400).send({ error: "invalid_id" });
     const body = decisionBody.parse(req.body);
-    return driver.resolveApproval(Number(req.params.id), body.decision === "approve", body.note, { stash: body.stash });
+    const resolved = await driver.resolveApproval(Number(req.params.id), body.decision === "approve", body.note, { stash: body.stash });
+    if (body.decision === "approve") await preview?.stop(resolved.task_id); // the work is merged and its worktree is gone
+    return resolved;
   });
 
   app.get("/projects/active", async (_req, reply) => notImplemented(reply, "M6"));
