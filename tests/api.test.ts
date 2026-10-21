@@ -203,6 +203,23 @@ describe("follow-up tasks", () => {
   });
 });
 
+describe("plan review option", () => {
+  it("stores the choice on the task and tells plan approvals from work approvals", async () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p', '/r')").run();
+    const base = services(db);
+    const app = buildApp({ db, accessToken: TOKEN, ...base });
+    const send = (method: "GET" | "POST", url: string, payload?: object) => app.inject({ method, url, headers: auth, payload });
+    const asked = (await send("POST", "/tasks", { project_id: 1, description: "a", review_plan: true })).json();
+    const plain = (await send("POST", "/tasks", { project_id: 1, description: "b" })).json();
+    expect([asked.review_plan, plain.review_plan]).toEqual([1, 0]);
+    base.tasks.transition(asked.id, "planning");
+    base.approvals.request(asked.id, "plan text", new Date(), "plan");
+    expect((await send("GET", "/approvals")).json()).toMatchObject([{ task_id: asked.id, kind: "plan" }]);
+    expect((await send("POST", "/tasks", { project_id: 1, description: "c", review_plan: "yes" })).statusCode).toBe(400);
+  });
+});
+
 describe("scheduled tasks", () => {
   it("creates a night task without starting it, and starting it by hand skips the wait", async () => {
     const db = openDb(":memory:");

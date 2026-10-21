@@ -51,6 +51,8 @@ export interface TaskRow {
   pause_reason: string | null;
   /** The merged task this one continues. */
   parent_task_id: number | null;
+  /** 1 when the owner wants to approve the plan before building. */
+  review_plan: number;
   created_at: string;
   updated_at: string;
 }

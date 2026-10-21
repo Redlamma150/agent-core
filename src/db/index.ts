@@ -23,6 +23,8 @@ export function openDb(path: string): Db {
   ensureColumn(db, "projects", "test_command", "TEXT");
   ensureColumn(db, "projects", "dev_command", "TEXT"); // M24: starts the project for a test environment, run in a shell; set from the computer only
   ensureColumn(db, "tasks", "reverted_at", "TEXT"); // M17
+  ensureColumn(db, "tasks", "review_plan", "INTEGER NOT NULL DEFAULT 0"); // M26: ask the owner to approve the plan before building
+  ensureColumn(db, "approvals", "kind", "TEXT NOT NULL DEFAULT 'work'"); // 'plan' or 'work'
   ensureColumn(db, "tasks", "parent_task_id", "INTEGER"); // M23: the merged task this one continues
   ensureColumn(db, "tasks", "pause_reason", "TEXT"); // M22: 'quota' while a task waits for the subscription to come back
   ensureColumn(db, "tasks", "scheduled_for", "TEXT"); // M20: UTC time a scheduled task should start

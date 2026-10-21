@@ -9,7 +9,7 @@ const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   received: ["planning", "blocked", "stopped"],
   planning: ["in_progress", "awaiting_approval", "blocked", "stopped"],
   in_progress: ["awaiting_approval", "blocked", "stopped"],
-  awaiting_approval: ["in_progress", "merged", "blocked", "stopped"],
+  awaiting_approval: ["planning", "in_progress", "merged", "blocked", "stopped"], // planning: the owner sent the plan back
   blocked: ["planning", "in_progress", "stopped"],
   merged: [],
   stopped: ["planning", "in_progress"],
@@ -53,6 +53,8 @@ export interface Task {
   reverted_at: string | null;
   /** UTC time ("YYYY-MM-DD HH:MM:SS") a scheduled task is waiting for. Null once it starts. */
   scheduled_for: string | null;
+  /** 1 when the owner wants to approve the plan before anything is built. */
+  review_plan: number;
   /** The merged task this one continues (a follow-up), or null. */
   parent_task_id: number | null;
   /** "quota" while the task waits for the subscription quota to come back; null otherwise. */
@@ -65,15 +67,15 @@ export interface Task {
 /** SQLite's own UTC text format, which the rest of the schema uses. */
 export const sqliteTime = (d: Date): string => d.toISOString().slice(0, 19).replace("T", " ");
 
-const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, reverted_at, scheduled_for, pause_reason, parent_task_id, token_extra, created_at, updated_at";
+const TASK_COLS = "id, project_id, description, status, branch, base_branch, tokens_used, failures, escalations, flagged, title, archived_at, deleted_at, reverted_at, scheduled_for, pause_reason, parent_task_id, review_plan, token_extra, created_at, updated_at";
 
 export class TaskService {
   constructor(private db: Db, private bus?: EventBus) {}
 
-  create(projectId: number, description: string, flagged = false, scheduledFor: Date | null = null): Task {
+  create(projectId: number, description: string, flagged = false, scheduledFor: Date | null = null, reviewPlan = false): Task {
     const info = this.db
-      .prepare("INSERT INTO tasks (project_id, description, flagged, title, scheduled_for) VALUES (?, ?, ?, ?, ?)")
-      .run(projectId, description, flagged ? 1 : 0, titleOf(description), scheduledFor ? sqliteTime(scheduledFor) : null);
+      .prepare("INSERT INTO tasks (project_id, description, flagged, title, scheduled_for, review_plan) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(projectId, description, flagged ? 1 : 0, titleOf(description), scheduledFor ? sqliteTime(scheduledFor) : null, reviewPlan ? 1 : 0);
     const id = Number(info.lastInsertRowid);
     this.db.prepare("INSERT INTO steps (task_id, agent, status, to_status, summary) VALUES (?, 'system', 'done', 'received', 'task created')").run(id);
     const task = this.get(id);

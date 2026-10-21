@@ -49,6 +49,7 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
   const [projectId, setProjectId] = useState(first);
   const [description, setDescription] = useState("");
   const [flagged, setFlagged] = useState(false);
+  const [reviewPlan, setReviewPlan] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [fileErrors, setFileErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -92,7 +93,7 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
     try {
       const text = description.trim() || "בצע לפי הקבצים המצורפים.";
       // Created on hold, files uploaded, then started: the agent sees the files from its very first step.
-      const task = await api<{ id: number }>("/tasks", { method: "POST", body: { project_id: Number(projectId), description: text, flagged, hold: files.length > 0, when } });
+      const task = await api<{ id: number }>("/tasks", { method: "POST", body: { project_id: Number(projectId), description: text, flagged, hold: files.length > 0, when, review_plan: reviewPlan } });
       if (files.length > 0) {
         const failed: string[] = [];
         for (const f of files) await uploadFile(task.id, f).catch(() => failed.push(f.name));
@@ -169,7 +170,7 @@ function Form({ projects, initial }: { projects: Project[]; initial?: number }) 
 
         <div className="card" style={{ gap: 14 }}>
           <Toggle label="משימה רגישה" sub="תרוץ על המודל החזק, צורכת יותר" checked={flagged} onChange={() => setFlagged(!flagged)} />
-          <Toggle label="הראה לי את התוכנית לפני הבנייה" sub="תאשר את התוכנית לפני שהבונה מתחיל" checked={false} soon />
+          <Toggle label="הראה לי את התוכנית לפני הבנייה" sub="המתכנן יציג תוכנית, והבונה יתחיל רק אחרי שתאשר אותה" checked={reviewPlan} onChange={() => setReviewPlan(!reviewPlan)} />
         </div>
         {error && <span className="err" role="alert">{error}</span>}
       </div>

@@ -11,6 +11,8 @@ import { LiveEnvironment, PreviewFrame, useShots } from "./Preview";
 export interface ApprovalRow {
   id: number;
   task_id: number;
+  /** "plan": the plan before building. "work": the finished change before merging. */
+  kind: "plan" | "work";
   request_text: string;
   reminders_sent: number;
   created_at: string;
@@ -22,11 +24,12 @@ export interface ApprovalRow {
  */
 export function useApprove() {
   const { schedule, setMergeError, notify } = useUndo();
-  return (a: Pick<ApprovalRow, "id" | "task_id">, opts: { stash?: boolean } = {}) => {
+  return (a: Pick<ApprovalRow, "id" | "task_id" | "kind">, opts: { stash?: boolean } = {}) => {
     setMergeError(a.id, null);
+    const plan = a.kind === "plan";
     schedule({
-      text: `משימה #${a.task_id} אושרה ותמוזג`,
-      task: { id: a.task_id, patch: { status: "merged" } },
+      text: plan ? `התוכנית של משימה #${a.task_id} אושרה. הבנייה מתחילה` : `משימה #${a.task_id} אושרה ותמוזג`,
+      task: { id: a.task_id, patch: { status: plan ? "in_progress" : "merged" } },
       approvalId: a.id,
       commit: async () => {
         const res = await api<{ warning?: string }>(`/approvals/${a.id}`, { method: "POST", body: { decision: "approve", stash: opts.stash } });
@@ -66,11 +69,11 @@ export function ApprovalsScreen() {
               const task = tasks.data?.find((t) => t.id === a.task_id);
               return (
                 <div key={a.id} className="card">
-                  <div className="row between"><StatusPill status="awaiting_approval" /><span className="muted">{relativeTime(a.created_at, now)}</span></div>
+                  <div className="row between"><StatusPill status="awaiting_approval" label={a.kind === "plan" ? "תוכנית ממתינה לאישור" : undefined} /><span className="muted">{relativeTime(a.created_at, now)}</span></div>
                   <div className="ttl clamp2">{task ? taskTitle(task) : `משימה #${a.task_id}`}</div>
                   <div className="txt clamp2 pre">{a.request_text}</div>
                   <div className="row">
-                    <button type="button" className="btn pri grow" disabled={!connected} onClick={() => approve(a)}>אשר ומזג</button>
+                    <button type="button" className="btn pri grow" disabled={!connected} onClick={() => approve(a)}>{a.kind === "plan" ? "אשר והתחל" : "אשר ומזג"}</button>
                     <a className="btn grow" href={`#/approvals/${a.id}`}>פתח</a>
                   </div>
                 </div>
@@ -124,7 +127,7 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
     <>
       <div className="body has-bar">
         <div className="group">
-          <StatusPill status="awaiting_approval" />
+          <StatusPill status="awaiting_approval" label={a.kind === "plan" ? "תוכנית ממתינה לאישור" : undefined} />
           <h1 className="h1s">{task.data ? taskTitle(task.data) : `משימה #${a.task_id}`}</h1>
           {task.data && <div className="row wrap"><AiBadge model={task.data.ai} /><span className="muted"><bdi>{task.data.project_name}</bdi></span></div>}
         </div>
@@ -132,11 +135,11 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
         {failure && <MergeFailed failure={failure} approval={a} onRetry={() => approveAndLeave()} onStash={() => approveAndLeave(true)} />}
 
         <div className="card">
-          <h2 className="h2">מה נעשה</h2>
+          <h2 className="h2">{a.kind === "plan" ? "התוכנית" : "מה נעשה"}</h2>
           <p className="txt pre">{a.request_text}</p>
         </div>
 
-        {changes.data && changes.data.length > 0 && (
+        {a.kind === "work" && changes.data && changes.data.length > 0 && (
           <div className="card">
             <h2 className="h2">קבצים ששונו ({changes.data.length})</h2>
             {changes.data.map((c) => (
@@ -148,9 +151,9 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
           </div>
         )}
 
-        <LiveEnvironment taskId={a.task_id} />
+        {a.kind === "work" && <LiveEnvironment taskId={a.task_id} />}
 
-        {shots.size > 0 && (
+        {a.kind === "work" && shots.size > 0 && (
           <div className="card">
             <h2 className="h2">איך זה נראה</h2>
             <PreviewFrame taskId={a.task_id} shots={shots} />
@@ -159,21 +162,22 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
 
         <div className="card">
           <h2 className="h2">איפה זה בתהליך</h2>
-          <div className="muted">שלב {STAGES[2]}: הבונה סיים, ומחכים להחלטה שלך.</div>
+          <div className="muted">{a.kind === "plan" ? `שלב ${STAGES[0]}: המתכנן סיים, והבונה יתחיל רק אחרי שתאשר.` : `שלב ${STAGES[2]}: הבונה סיים, ומחכים להחלטה שלך.`}</div>
           <a className="btn ghost" style={{ alignSelf: "flex-start" }} href={`#/tasks/${a.task_id}`}>למשימה</a>
         </div>
       </div>
       <div className="bar-fixed">
-        <button type="button" className="btn pri big" disabled={!connected} onClick={() => approveAndLeave()}><Icon name="check" color="#fff" width={2.6} />אשר ומזג</button>
-        <button type="button" className="btn" disabled={!connected} onClick={() => setRejecting(true)}>בקש תיקון (דחה עם הערה)</button>
+        <button type="button" className="btn pri big" disabled={!connected} onClick={() => approveAndLeave()}><Icon name="check" color="#fff" width={2.6} />{a.kind === "plan" ? "אשר והתחל לבנות" : "אשר ומזג"}</button>
+        <button type="button" className="btn" disabled={!connected} onClick={() => setRejecting(true)}>{a.kind === "plan" ? "בקש שינוי בתוכנית" : "בקש תיקון (דחה עם הערה)"}</button>
       </div>
       {rejecting && (
         <RejectSheet
+          plan={a.kind === "plan"}
           onClose={() => setRejecting(false)}
           onSend={async (note) => {
             try {
               await api(`/approvals/${a.id}`, { method: "POST", body: { decision: "reject", note } });
-              notify("נשלח לבונה עם ההערה");
+              notify(a.kind === "plan" ? "נשלח למתכנן עם ההערה" : "נשלח לבונה עם ההערה");
               window.location.hash = "#/approvals";
             } catch (err) {
               notify(errorText(err));
@@ -209,7 +213,7 @@ function MergeFailed({ failure, approval, onRetry, onStash }: { failure: MergeFa
   );
 }
 
-function RejectSheet({ onClose, onSend }: { onClose: () => void; onSend: (note: string) => Promise<void> }) {
+function RejectSheet({ onClose, onSend, plan }: { onClose: () => void; onSend: (note: string) => Promise<void>; plan: boolean }) {
   const [note, setNote] = useState("");
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -223,8 +227,8 @@ function RejectSheet({ onClose, onSend }: { onClose: () => void; onSend: (note: 
     setBusy(false);
   }
   return (
-    <Sheet title="מה לתקן?" onClose={onClose}>
-      <textarea className="field" style={{ height: 110 }} aria-label="הערה לבונה" placeholder="למשל: הכותרת ארוכה מדי בנייד" value={note} onChange={(e) => { setNote(e.target.value); setError(false); }} />
+    <Sheet title={plan ? "מה לשנות בתוכנית?" : "מה לתקן?"} onClose={onClose}>
+      <textarea className="field" style={{ height: 110 }} aria-label="הערה לבונה" placeholder={plan ? "למשל: בלי כפתור חדש, רק לשנות את הכותרת" : "למשל: הכותרת ארוכה מדי בנייד"} value={note} onChange={(e) => { setNote(e.target.value); setError(false); }} />
       {error && <span className="err" role="alert">דחייה דורשת הערה</span>}
       <div className="row wrap">
         <Soon>צילום מסך עם סימון</Soon>
@@ -233,7 +237,7 @@ function RejectSheet({ onClose, onSend }: { onClose: () => void; onSend: (note: 
         </button>
       </div>
       <div className="row">
-        <button type="button" className="btn pri grow" disabled={busy} onClick={send}>שלח לבונה</button>
+        <button type="button" className="btn pri grow" disabled={busy} onClick={send}>{plan ? "שלח למתכנן" : "שלח לבונה"}</button>
         <button type="button" className="btn grow" onClick={onClose}>ביטול</button>
       </div>
     </Sheet>
