@@ -145,3 +145,21 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
   if (!res.ok) throw new ApiError(res.status, body);
   return body?.text ?? "";
 }
+
+/** A file for the operator's chat. Returns its id, which the chat message then refers to. */
+export async function uploadChatFile(file: File): Promise<number> {
+  const token = tokenStore.get();
+  if (!token) throw new ApiError(401, null);
+  const res = await fetch(`/chat/media?name=${encodeURIComponent(file.name)}`, {
+    method: "POST",
+    headers: headers(token, { "content-type": file.type || "application/octet-stream" }),
+    body: file,
+  });
+  if (res.status === 401) {
+    onUnauthorized();
+    throw new ApiError(401, null);
+  }
+  const body = (await res.json().catch(() => null)) as { id?: number } | null;
+  if (!res.ok || typeof body?.id !== "number") throw new ApiError(res.status, body);
+  return body.id;
+}

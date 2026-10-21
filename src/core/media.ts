@@ -135,3 +135,64 @@ export class MediaService {
     return this.db.prepare("SELECT path, name, mime FROM attachments WHERE task_id = ? AND kind = 'upload' ORDER BY id").all(taskId) as { path: string; name: string; mime: string }[];
   }
 }
+
+export const MAX_CHAT_FILES = 5;
+/** Files from the chat are kept this long; whatever the operator turned into a task was copied to the task already. */
+export const CHAT_MEDIA_DAYS = 7;
+
+export interface ChatFile {
+  id: number;
+  name: string;
+  mime: string;
+  size: number;
+  path: string;
+}
+
+/** Files the owner sends to the operator in the chat. Same type and size rules as task files, but they belong to no task. */
+export class ChatMediaService {
+  private root: string;
+
+  constructor(private db: Db, uploadsDir: string) {
+    this.root = join(resolve(uploadsDir), "chat");
+  }
+
+  /** The folder the operator is given read access to. */
+  dir(): string {
+    return this.root;
+  }
+
+  save(rawName: string, mime: string, data: Buffer): Omit<ChatFile, "path"> {
+    if (!ALLOWED_MIME.has(mime)) throw new MediaError("סוג הקובץ לא נתמך. אפשר תמונות, PDF וקבצי טקסט.");
+    if (data.length === 0) throw new MediaError("הקובץ ריק.");
+    if (data.length > MAX_FILE_BYTES) throw new MediaError("הקובץ גדול מדי (עד 15MB).");
+    if (!matchesContent(mime, data)) throw new MediaError("תוכן הקובץ לא תואם לסוג שלו.");
+    const name = safeName(rawName, mime);
+    mkdirSync(this.root, { recursive: true });
+    const id = Number(this.db.prepare("INSERT INTO chat_media (name, mime, size, path) VALUES (?, ?, ?, '')").run(name, mime, data.length).lastInsertRowid);
+    const path = join(this.root, `${id}-${name}`);
+    writeFileSync(path, data);
+    this.db.prepare("UPDATE chat_media SET path = ? WHERE id = ?").run(path, id);
+    return { id, name, mime, size: data.length };
+  }
+
+  /** The files for the given ids, in that order. An unknown id is a mistake by the caller, not something to skip silently. */
+  get(ids: number[]): ChatFile[] {
+    const unique = [...new Set(ids)];
+    if (unique.length > MAX_CHAT_FILES) throw new MediaError(`אפשר לצרף עד ${MAX_CHAT_FILES} קבצים להודעה.`);
+    return unique.map((id) => {
+      const row = this.db.prepare("SELECT id, name, mime, size, path FROM chat_media WHERE id = ?").get(id) as ChatFile | undefined;
+      if (!row) throw new NotFoundError(`chat file ${id} not found`);
+      return row;
+    });
+  }
+
+  /** Removes files older than the retention time. Returns how many were removed. */
+  purge(days = CHAT_MEDIA_DAYS): number {
+    const old = this.db.prepare("SELECT id, path FROM chat_media WHERE created_at < datetime('now', ?)").all(`-${days} days`) as { id: number; path: string }[];
+    for (const r of old) {
+      rmSync(r.path, { force: true });
+      this.db.prepare("DELETE FROM chat_media WHERE id = ?").run(r.id);
+    }
+    return old.length;
+  }
+}
