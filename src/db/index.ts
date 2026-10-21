@@ -22,6 +22,7 @@ export function openDb(path: string): Db {
   ensureColumn(db, "tasks", "token_extra", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "projects", "test_command", "TEXT");
   ensureColumn(db, "tasks", "reverted_at", "TEXT"); // M17
+  ensureColumn(db, "tasks", "parent_task_id", "INTEGER"); // M23: the merged task this one continues
   ensureColumn(db, "tasks", "pause_reason", "TEXT"); // M22: 'quota' while a task waits for the subscription to come back
   ensureColumn(db, "tasks", "scheduled_for", "TEXT"); // M20: UTC time a scheduled task should start
   ensureColumn(db, "tasks", "revert_commit", "TEXT");

@@ -165,6 +165,39 @@ describe("pipeline", () => {
     expect(JSON.parse(row.handoff)).toEqual([{ path: "hello.txt", status: "added", added: 1, removed: 0 }]);
   });
 
+  it("a follow-up of a merged task builds on its changes and gives the agents the original's context", async () => {
+    let n = 0;
+    const t = await setup({
+      builder: (call) => {
+        const taskId = Number(/Task (\d+)/.exec(call.prompt)?.[1]);
+        writeFileSync(join(String(call.options.cwd), n++ === 0 ? "hello.txt" : "second.txt"), "x\n");
+        return handoff(taskId, "builder");
+      },
+    });
+    t.pipeline.start(t.task.id);
+    await t.pipeline.idle();
+    await t.pipeline.resolveApproval(t.approvals.pending()[0]!.id, true);
+
+    const follow = t.tasks.createFollowUp(t.task.id, "הכפתור עדיין קטן מדי בנייד");
+    expect(follow).toMatchObject({ parent_task_id: t.task.id, project_id: 1, description: "הכפתור עדיין קטן מדי בנייד" });
+    t.pipeline.start(follow.id);
+    await t.pipeline.idle();
+
+    expect(t.tasks.get(follow.id).status).toBe("awaiting_approval");
+    const builderPrompt = t.calls.filter((c) => c.role === "builder").at(-1)!.prompt;
+    expect(builderPrompt).toContain(`continues task ${t.task.id}`);
+    expect(builderPrompt).toContain("add hello.txt"); // the original request
+    expect(builderPrompt).toContain("הכפתור עדיין קטן מדי בנייד");
+    expect(builderPrompt).toContain("hello.txt"); // from the original's approval request (files changed)
+    expect(t.db.prepare("SELECT status FROM steps WHERE task_id = ? AND status = 'follow_up'").get(follow.id)).toBeTruthy();
+    expect(existsSync(join(t.repo, "hello.txt"))).toBe(true); // the original's change is already in the base the follow-up branches from
+  });
+
+  it("only a merged task can be continued with a follow-up", async () => {
+    const t = await setup();
+    expect(() => t.tasks.createFollowUp(t.task.id, "fix")).toThrow(/only a merged task/);
+  });
+
   it("approve with stash merges over the owner's unsaved changes and keeps them", async () => {
     const t = await setup();
     t.pipeline.start(t.task.id);

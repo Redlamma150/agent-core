@@ -183,6 +183,26 @@ describe("merge failures, stash and revert", () => {
   });
 });
 
+describe("follow-up tasks", () => {
+  it("continues a merged task with a new task and refuses anything else", async () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO projects (name, repo_path) VALUES ('p', '/r')").run();
+    db.prepare("INSERT INTO tasks (project_id, description) VALUES (1, 'first')").run();
+    const base = services(db);
+    const app = buildApp({ db, accessToken: TOKEN, ...base });
+    const send = (url: string, payload: object) => app.inject({ method: "POST", url, headers: auth, payload });
+
+    expect((await send("/tasks/1/followup", { note: "fix it" })).statusCode).toBe(409); // not merged
+    db.prepare("UPDATE tasks SET status = 'merged' WHERE id = 1").run();
+    expect((await send("/tasks/1/followup", { note: "  " })).statusCode).toBe(400);
+    const res = await send("/tasks/1/followup", { note: "the title is cut off" });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ parent_task_id: 1, description: "the title is cut off", project_id: 1 });
+    expect(base.started).toEqual([res.json().id]);
+    expect((await send("/tasks/99/followup", { note: "x" })).statusCode).toBe(404);
+  });
+});
+
 describe("scheduled tasks", () => {
   it("creates a night task without starting it, and starting it by hand skips the wait", async () => {
     const db = openDb(":memory:");

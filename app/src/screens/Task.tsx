@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useApi, useConnected, useTick } from "../hooks";
+import { clock, useVoice, useVoiceAvailable } from "../lib/voice";
 import { api } from "../lib/api";
 import { activityLabel, clockTime, formatDate, formatNumber, parseDbDate, RUNNING, relativeTime, scheduleLabel, STAGES, stageOf, stepLabel, taskTitle, waitsForQuota, type TaskRow } from "../lib/format";
 import { AiBadge, InnerBar, Sheet, StatusPill, Stepper } from "../ui";
@@ -39,6 +40,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
   const [tab, setTab] = useState<TabKey>("overview");
   const [editing, setEditing] = useState(false);
   const [confirmRevert, setConfirmRevert] = useState(false);
+  const [followingUp, setFollowingUp] = useState(false);
   const { shots } = useShots(t.id);
 
   /** Runs one action on the task and refreshes; the core answers 409 when the state no longer fits. */
@@ -113,6 +115,16 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
         </div>
       )}
 
+      {!trashed && t.status === "merged" && (
+        <div className="card">
+          <div className="ttl">משהו לא מושלם?</div>
+          <p className="txt">אפשר להמשיך את המשימה: כותבים או מקליטים מה לתקן או להוסיף, והסוכנים ממשיכים מהמצב הנוכחי של הפרויקט, עם ההקשר של המשימה הזאת.</p>
+          <button type="button" className="btn pri" disabled={!connected} onClick={() => setFollowingUp(true)}>המשך את המשימה</button>
+        </div>
+      )}
+
+      {followingUp && <FollowUpSheet taskId={t.id} onClose={() => setFollowingUp(false)} />}
+
       {!trashed && t.status === "merged" && !t.reverted_at && (
         <div className="card good">
           <div className="ttl" style={{ color: "var(--success-ink)" }}>השינוי מוזג לפרויקט</div>
@@ -179,6 +191,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
               <dt>נוצרה</dt><dd><bdi>{formatDate(t.created_at)}</bdi></dd>
               <dt>עודכנה</dt><dd>{relativeTime(t.updated_at, now)}</dd>
               <dt>מספר</dt><dd><span className="mono">#{t.id}</span></dd>
+              {t.parent_task_id && <><dt>המשך של</dt><dd><a href={`#/tasks/${t.parent_task_id}`}><span className="mono">#{t.parent_task_id}</span></a></dd></>}
             </dl>
           </div>
         </>
@@ -217,6 +230,43 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** A merged task that needs more: what to fix or add becomes a new task that continues it. */
+function FollowUpSheet({ taskId, onClose }: { taskId: number; onClose: () => void }) {
+  const [note, setNote] = useState("");
+  const [needNote, setNeedNote] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const { notify } = useUndo();
+  const available = useVoiceAvailable();
+  const voice = useVoice((text) => { setNote((n) => (n.trim() ? `${n.trimEnd()}\n${text}` : text)); setNeedNote(false); }, notify);
+  async function send() {
+    if (note.trim() === "") return setNeedNote(true);
+    setBusy(true);
+    try {
+      const created = await api<{ id: number }>(`/tasks/${taskId}/followup`, { method: "POST", body: { note: note.trim() } });
+      onClose();
+      window.location.hash = `#/tasks/${created.id}`;
+    } catch (err) {
+      notify(errorText(err));
+      setBusy(false);
+    }
+  }
+  return (
+    <Sheet title="מה לתקן או להוסיף?" onClose={onClose}>
+      <textarea className="field" style={{ height: 120 }} aria-label="מה לתקן או להוסיף" placeholder="למשל: הכפתור עדיין קטן מדי בנייד" value={note} onChange={(e) => { setNote(e.target.value); setNeedNote(false); }} />
+      {needNote && <span className="err" role="alert">כתוב מה לתקן, או הקלט</span>}
+      <div className="row wrap">
+        <button type="button" className={`chip ${voice.state === "recording" ? "recording" : ""}`} disabled={!available || voice.state === "transcribing"} aria-pressed={voice.state === "recording"} onClick={voice.toggle}>
+          {voice.state === "recording" ? `עצור (${clock(voice.seconds)})` : voice.state === "transcribing" ? "מתמלל…" : available ? "הקלטה" : "הקלטה (לא מותקן)"}
+        </button>
+      </div>
+      <div className="row">
+        <button type="button" className="btn pri grow" disabled={busy} onClick={() => void send()}>שלח לסוכנים</button>
+        <button type="button" className="btn grow" onClick={onClose}>ביטול</button>
+      </div>
+    </Sheet>
   );
 }
 
