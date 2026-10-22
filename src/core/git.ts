@@ -87,6 +87,11 @@ export class GitService {
     return out.split("\n").filter(Boolean);
   }
 
+  /** Files in a worktree that are changed but not committed yet, for example work left by an earlier run. */
+  async pendingChanges(worktree: string): Promise<string[]> {
+    return (await simpleGit(worktree).status()).files.map((f) => f.path);
+  }
+
   /** What changed on the task branch, per file: how (added, changed, deleted, renamed) and how many lines. No diff content. */
   async changeSummary(repoPath: string, base: string, branch: string): Promise<FileChange[]> {
     const git = simpleGit(repoPath);
