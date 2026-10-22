@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useApi, useConnected, useTick } from "../hooks";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, uploadFile } from "../lib/api";
 import { describeChange, relativeTime, STAGES, taskTitle, type FileChange, type TaskRow } from "../lib/format";
 import { AiBadge, Icon, InnerBar, Sheet, Soon, StatusPill, TopBar } from "../ui";
 import { useUndo, type MergeFailure } from "../undo";
 import { coreMessage, errorText, State } from "./common";
 import { clock, useVoice, useVoiceAvailable } from "../lib/voice";
+import { AnnotatorSheet, loadMarkSource, type MarkSource } from "./Annotate";
+import { AttachmentChips, MAX_FILES } from "./media";
 import { LiveEnvironment, PreviewFrame, useShots } from "./Preview";
 
 export interface ApprovalRow {
@@ -173,9 +175,13 @@ function Detail({ a, failure }: { a: ApprovalRow; failure: MergeFailure | undefi
       {rejecting && (
         <RejectSheet
           plan={a.kind === "plan"}
+          taskId={a.task_id}
+          shots={[...shots.values()].filter((s) => s.name.startsWith("after-"))}
           onClose={() => setRejecting(false)}
-          onSend={async (note) => {
+          onSend={async (note, marked) => {
             try {
+              // The marked screenshots become files of the task first, so the builder finds them on its next run.
+              for (const f of marked) await uploadFile(a.task_id, f);
               await api(`/approvals/${a.id}`, { method: "POST", body: { decision: "reject", note } });
               notify(a.kind === "plan" ? "נשלח למתכנן עם ההערה" : "נשלח לבונה עם ההערה");
               window.location.hash = "#/approvals";
@@ -213,25 +219,44 @@ function MergeFailed({ failure, approval, onRetry, onStash }: { failure: MergeFa
   );
 }
 
-function RejectSheet({ onClose, onSend, plan }: { onClose: () => void; onSend: (note: string) => Promise<void>; plan: boolean }) {
+function RejectSheet({ onClose, onSend, plan, taskId, shots }: { onClose: () => void; onSend: (note: string, marked: File[]) => Promise<void>; plan: boolean; taskId: number; shots: { id: number; name: string }[] }) {
   const [note, setNote] = useState("");
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [marked, setMarked] = useState<File[]>([]);
+  const [drawing, setDrawing] = useState<Blob | null>(null);
+  const pick = useRef<HTMLInputElement>(null);
   const { notify } = useUndo();
   const available = useVoiceAvailable();
   const voice = useVoice((text) => { setNote((n) => (n.trim() ? `${n.trimEnd()}\n${text}` : text)); setError(false); }, notify);
+  async function startMarking(src: MarkSource) {
+    try {
+      setDrawing(await loadMarkSource(src));
+    } catch (err) {
+      notify(errorText(err));
+    }
+  }
   async function send() {
-    if (note.trim() === "") return setError(true);
+    // A marked screenshot is a complete request on its own; the text is only required when there is none.
+    if (note.trim() === "" && marked.length === 0) return setError(true);
     setBusy(true);
-    await onSend(note.trim());
+    await onSend(note.trim() || "ראה את הצילום עם הסימון.", marked);
     setBusy(false);
   }
   return (
     <Sheet title={plan ? "מה לשנות בתוכנית?" : "מה לתקן?"} onClose={onClose}>
       <textarea className="field" style={{ height: 110 }} aria-label="הערה לבונה" placeholder={plan ? "למשל: בלי כפתור חדש, רק לשנות את הכותרת" : "למשל: הכותרת ארוכה מדי בנייד"} value={note} onChange={(e) => { setNote(e.target.value); setError(false); }} />
-      {error && <span className="err" role="alert">דחייה דורשת הערה</span>}
+      {error && <span className="err" role="alert">דחייה דורשת הערה, הקלטה או צילום מסומן</span>}
+      <AttachmentChips files={marked} onRemove={(i) => setMarked(marked.filter((_, j) => j !== i))} />
+      {drawing && <AnnotatorSheet source={drawing} onClose={() => setDrawing(null)} onDone={(file) => { setMarked((m) => [...m, file]); setDrawing(null); setError(false); }} />}
       <div className="row wrap">
-        <Soon>צילום מסך עם סימון</Soon>
+        <input ref={pick} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void startMarking({ kind: "file", file: f }); }} />
+        <button type="button" className="chip" disabled={marked.length >= MAX_FILES} onClick={() => pick.current?.click()}>צילום מסך עם סימון</button>
+        {shots.map((s) => (
+          <button key={s.id} type="button" className="chip" disabled={marked.length >= MAX_FILES} onClick={() => void startMarking({ kind: "shot", taskId, mediaId: s.id })}>
+            {s.name.includes("phone") ? "סמן על התוצר בנייד" : "סמן על התוצר במחשב"}
+          </button>
+        ))}
         <button type="button" className={`chip ${voice.state === "recording" ? "recording" : ""}`} disabled={!available || voice.state === "transcribing"} aria-pressed={voice.state === "recording"} onClick={voice.toggle}>
           {voice.state === "recording" ? `עצור (${clock(voice.seconds)})` : voice.state === "transcribing" ? "מתמלל…" : available ? "הקלטה" : "הקלטה (לא מותקן)"}
         </button>

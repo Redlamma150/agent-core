@@ -395,7 +395,9 @@ export class Pipeline implements TaskDriver {
   private attachmentsNote(taskId: number): string {
     const files = this.d.media?.paths(taskId) ?? [];
     if (files.length === 0) return "";
-    return `\n\nFiles attached by the owner (images, PDFs or text; open them with the Read tool and use them as reference, do not copy them into the repo unless the task asks for it):\n${files.map((f) => `- ${f.path} (${f.name})`).join("\n")}`;
+    // Screenshots the owner drew on in the app are named annotated-*.png; the marks are the point of the picture.
+    const marked = files.some((f) => f.name.startsWith("annotated-"));
+    return `\n\nFiles attached by the owner (images, PDFs or text; open them with the Read tool and use them as reference, do not copy them into the repo unless the task asks for it):\n${files.map((f) => `- ${f.path} (${f.name})`).join("\n")}${marked ? "\nFiles named annotated-*.png are the owner's screenshots with coloured marks drawn on them: the marks show exactly what is wrong or what to change. Look at them first." : ""}`;
   }
 
   private attachmentDirs(taskId: number): string[] | undefined {

@@ -104,14 +104,20 @@ export function Soon({ children }: { children: ReactNode }) {
   return <span className="muted">{children} <span className="soon-tag">בקרוב</span></span>;
 }
 
+/** Sheets that are open, newest last: only the top one reacts to Escape and Tab, so a sheet opened from a sheet closes alone. */
+const sheetStack: symbol[] = [];
+
 /** Bottom sheet: dialog role, focus moves in and stays in, Escape closes, focus returns when it closes. */
 export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    const me = Symbol("sheet");
+    sheetStack.push(me);
     const previous = document.activeElement as HTMLElement | null;
     const focusable = () => Array.from(ref.current?.querySelectorAll<HTMLElement>("textarea, input, button:not(:disabled), a[href]") ?? []);
     focusable()[0]?.focus();
     function onKey(e: KeyboardEvent) {
+      if (sheetStack[sheetStack.length - 1] !== me) return;
       if (e.key === "Escape") return onClose();
       if (e.key !== "Tab") return;
       const items = focusable();
@@ -121,7 +127,7 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
     document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("keydown", onKey); previous?.focus(); };
+    return () => { document.removeEventListener("keydown", onKey); sheetStack.splice(sheetStack.indexOf(me), 1); previous?.focus(); };
   }, [onClose]);
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
