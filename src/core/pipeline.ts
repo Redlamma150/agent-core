@@ -271,10 +271,17 @@ export class Pipeline implements TaskDriver {
     if (followUp) parts.push(followUp);
     const attached = this.attachmentsNote(task.id).trim();
     if (attached) parts.push(attached);
+    // A continued task finds its earlier work still in the worktree; say so, or the agent starts over or gives up.
+    const left = await git.pendingChanges(prepared.worktree).catch(() => []);
+    if (left.length > 0) {
+      parts.push(`Earlier runs of this task already left uncommitted changes in your worktree (${left.length} files): ${left.slice(0, 30).join(", ")}. Review them against the plan first, finish what is missing and do not redo what is done. If the plan is already fully implemented, report status "done".`);
+    }
 
     const out = await executeAgent(this.d, {
       taskId: task.id,
       role: "builder",
+      // If the builder says it is stuck but real changes exist, the owner gets them to judge instead of a dead end.
+      salvage: async () => (await git.pendingChanges(prepared.worktree).catch(() => [])).length > 0 || (await git.changedFiles(project.repo_path, prepared.base, prepared.branch).catch(() => [])).length > 0,
       systemPrompt: loadTemplate("builder"),
       prompt: parts.join("\n\n"),
       cwd: prepared.worktree,

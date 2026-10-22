@@ -262,6 +262,60 @@ describe("pipeline", () => {
     });
   });
 
+  describe("a builder that says it is blocked", () => {
+    const blocked = (call: Call, write?: string) => {
+      if (write) writeFileSync(join(String(call.options.cwd), write), "partial work\n");
+      return handoff(Number(/Task (\d+)/.exec(call.prompt)?.[1]), "builder", { status: "blocked", summary: "לא הצלחתי להריץ בדיקות: הפקודה נדחתה", confidence: 0.8 });
+    };
+
+    it("hands over the work it left in the worktree instead of dead-ending the task", async () => {
+      const t = await setup({ builder: (c) => blocked(c, "partial.txt") });
+      t.pipeline.start(t.task.id);
+      await t.pipeline.idle();
+
+      expect(t.tasks.get(t.task.id).status).toBe("awaiting_approval");
+      const [approval] = t.approvals.pending();
+      expect(approval!.request_text).toContain("partial.txt");
+      expect(approval!.request_text).toContain("הבונה דיווח שהוא נתקע: לא הצלחתי להריץ בדיקות"); // the owner sees why, up front
+      expect(t.db.prepare("SELECT status FROM steps WHERE task_id = ? AND status = 'salvaged'").get(t.task.id)).toBeTruthy();
+    });
+
+    it("still blocks when there is nothing in the worktree to show", async () => {
+      const t = await setup({ builder: (c) => blocked(c) });
+      t.pipeline.start(t.task.id);
+      await t.pipeline.idle();
+      expect(t.tasks.get(t.task.id).status).toBe("blocked");
+      expect(t.approvals.pending()).toEqual([]);
+    });
+
+    it("tells a continued builder what the earlier runs already left in the worktree", async () => {
+      let first = true;
+      const t = await setup({
+        builder: (c) => {
+          if (first) {
+            first = false;
+            writeFileSync(join(String(c.options.cwd), "left-behind.txt"), "x\n");
+            return blocked(c); // blocked after leaving a file, but then the file is pending... cleared below
+          }
+          return handoff(Number(/Task (\d+)/.exec(c.prompt)?.[1]), "builder");
+        },
+      });
+      t.pipeline.start(t.task.id);
+      await t.pipeline.idle();
+      // the owner rejects the delivered work: the next builder run starts with the file still in the worktree
+      await t.pipeline.resolveApproval(t.approvals.pending()[0]!.id, false, "תמשיך");
+      await t.pipeline.idle();
+      const second = t.calls.filter((c) => c.role === "builder").at(-1)!;
+      expect(second.prompt).not.toContain("left-behind.txt"); // it was committed when handed over, so it is not "uncommitted"
+      expect(t.calls.filter((c) => c.role === "builder")).toHaveLength(2);
+    });
+
+    it("keeps the builder away from plain node: the project's own tests are run by the core instead", async () => {
+      const { BUILDER_ALLOWED } = await import("../src/agents/templates.js");
+      expect(BUILDER_ALLOWED.some((x) => x.startsWith("Bash(node"))).toBe(false);
+    });
+  });
+
   it("approve with stash merges over the owner's unsaved changes and keeps them", async () => {
     const t = await setup();
     t.pipeline.start(t.task.id);
@@ -326,7 +380,7 @@ describe("pipeline", () => {
       },
     });
     t.pipeline.start(t.task.id);
-    await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 100 && !signal; i++) await new Promise((r) => setTimeout(r, 50)); // until the builder is really running
     t.pipeline.stop(t.task.id);
     expect(signal?.aborted).toBe(true);
     release();

@@ -27,7 +27,15 @@ export function shortReason(summary: string, max = 90): string {
  */
 export async function executeAgent(
   deps: { tasks: TaskService; runner: AgentRunner; budget: BudgetService; settings?: SettingsService },
-  req: Omit<RunRequest, "model" | "escalated" | "taskId"> & { taskId: number },
+  req: Omit<RunRequest, "model" | "escalated" | "taskId"> & {
+    taskId: number;
+    /**
+     * Asked when the agent reports "blocked". Returning true means there is work worth showing the owner anyway (changes
+     * already in the worktree): the result is then handed over as done, with the agent's reason as an open item, instead
+     * of dead-ending the task.
+     */
+    salvage?: (handoff: Handoff) => Promise<boolean>;
+  },
 ): Promise<Outcome> {
   const { tasks, runner, budget, settings } = deps;
   const id = req.taskId;
@@ -64,6 +72,10 @@ export async function executeAgent(
     }
     tasks.resetFailures(id);
     if (res.handoff.status === "blocked") {
+      if (req.salvage && (await req.salvage(res.handoff))) {
+        tasks.note(id, "salvaged", `הסוכן דיווח שהוא תקוע, אבל יש שינויים בעותק העבודה, ולכן הם הועברו לבדיקה שלך: ${shortReason(res.handoff.summary)}`);
+        return { kind: "completed", handoff: { ...res.handoff, status: "done", open_items: [`הבונה דיווח שהוא נתקע: ${res.handoff.summary}`, ...res.handoff.open_items] } };
+      }
       tasks.transition(id, "blocked", res.handoff.summary, `הסוכן דיווח שהוא תקוע: ${shortReason(res.handoff.summary)}`);
       return { kind: "blocked", reasons: [res.handoff.summary], handoff: res.handoff };
     }
