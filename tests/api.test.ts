@@ -200,6 +200,9 @@ describe("follow-up tasks", () => {
     expect(res.json()).toMatchObject({ parent_task_id: 1, description: "the title is cut off", project_id: 1 });
     expect(base.started).toEqual([res.json().id]);
     expect((await send("/tasks/99/followup", { note: "x" })).statusCode).toBe(404);
+    const held = await send("/tasks/1/followup", { note: "with a picture", hold: true });
+    expect(held.statusCode).toBe(201);
+    expect(base.started).toEqual([res.json().id]); // not started: the picture is attached first
   });
 });
 

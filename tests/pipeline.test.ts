@@ -316,6 +316,24 @@ describe("pipeline", () => {
     });
   });
 
+  it("tells the agents what the annotated screenshots are", async () => {
+    const t = await setup();
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(40, 1)]);
+    t.media.save(t.task.id, "annotated-1.png", "image/png", png);
+    t.media.save(t.task.id, "other.png", "image/png", png);
+    t.pipeline.start(t.task.id);
+    await t.pipeline.idle();
+    for (const c of t.calls) {
+      expect(c.prompt).toContain("annotated-1.png");
+      expect(c.prompt).toContain("coloured marks drawn on them");
+    }
+    const plain = await setup();
+    plain.media.save(plain.task.id, "other.png", "image/png", png);
+    plain.pipeline.start(plain.task.id);
+    await plain.pipeline.idle();
+    expect(plain.calls[0]!.prompt).not.toContain("coloured marks");
+  });
+
   it("approve with stash merges over the owner's unsaved changes and keeps them", async () => {
     const t = await setup();
     t.pipeline.start(t.task.id);

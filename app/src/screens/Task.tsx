@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useApi, useConnected, useTick } from "../hooks";
 import { clock, useVoice, useVoiceAvailable } from "../lib/voice";
-import { api } from "../lib/api";
+import { api, uploadFile } from "../lib/api";
 import { activityLabel, clockTime, formatDate, formatNumber, parseDbDate, RUNNING, relativeTime, scheduleLabel, STAGES, stageOf, stepLabel, taskTitle, waitsForQuota, type TaskRow } from "../lib/format";
 import { AiBadge, InnerBar, Sheet, StatusPill, Stepper } from "../ui";
 import { useUndo } from "../undo";
 import { errorText, State } from "./common";
 import { TaskGallery } from "./media";
+import { AnnotatorSheet, loadMarkSource, type MarkSource } from "./Annotate";
+import { AttachmentChips, MAX_FILES } from "./media";
 import { LiveEnvironment, PreviewFrame, useShots } from "./Preview";
 
 interface ActivityRow { id: number; agent: string; tool: string; target: string | null; created_at: string }
@@ -124,7 +126,7 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
         </div>
       )}
 
-      {followingUp && <FollowUpSheet taskId={t.id} onClose={() => setFollowingUp(false)} />}
+      {followingUp && <FollowUpSheet taskId={t.id} shots={[...shots.values()].filter((s) => s.name.startsWith("after-"))} onClose={() => setFollowingUp(false)} />}
 
       {!trashed && t.status === "merged" && !t.reverted_at && (
         <div className="card good">
@@ -237,18 +239,33 @@ function TaskView({ base, reload }: { base: TaskRow; reload: () => void }) {
 }
 
 /** A merged task that needs more: what to fix or add becomes a new task that continues it. */
-function FollowUpSheet({ taskId, onClose }: { taskId: number; onClose: () => void }) {
+function FollowUpSheet({ taskId, shots, onClose }: { taskId: number; shots: { id: number; name: string }[]; onClose: () => void }) {
   const [note, setNote] = useState("");
   const [needNote, setNeedNote] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [marked, setMarked] = useState<File[]>([]);
+  const [drawing, setDrawing] = useState<Blob | null>(null);
+  const pick = useRef<HTMLInputElement>(null);
   const { notify } = useUndo();
   const available = useVoiceAvailable();
   const voice = useVoice((text) => { setNote((n) => (n.trim() ? `${n.trimEnd()}\n${text}` : text)); setNeedNote(false); }, notify);
+  async function startMarking(src: MarkSource) {
+    try {
+      setDrawing(await loadMarkSource(src));
+    } catch (err) {
+      notify(errorText(err));
+    }
+  }
   async function send() {
-    if (note.trim() === "") return setNeedNote(true);
+    if (note.trim() === "" && marked.length === 0) return setNeedNote(true);
     setBusy(true);
     try {
-      const created = await api<{ id: number }>(`/tasks/${taskId}/followup`, { method: "POST", body: { note: note.trim() } });
+      // Created on hold, marked screenshots attached, then started: the agents see them from their first step.
+      const created = await api<{ id: number }>(`/tasks/${taskId}/followup`, { method: "POST", body: { note: note.trim() || "ראה את הצילום עם הסימון.", hold: marked.length > 0 } });
+      if (marked.length > 0) {
+        for (const f of marked) await uploadFile(created.id, f);
+        await api(`/tasks/${created.id}/start`, { method: "POST", body: {} });
+      }
       onClose();
       window.location.hash = `#/tasks/${created.id}`;
     } catch (err) {
@@ -259,8 +276,17 @@ function FollowUpSheet({ taskId, onClose }: { taskId: number; onClose: () => voi
   return (
     <Sheet title="מה לתקן או להוסיף?" onClose={onClose}>
       <textarea className="field" style={{ height: 120 }} aria-label="מה לתקן או להוסיף" placeholder="למשל: הכפתור עדיין קטן מדי בנייד" value={note} onChange={(e) => { setNote(e.target.value); setNeedNote(false); }} />
-      {needNote && <span className="err" role="alert">כתוב מה לתקן, או הקלט</span>}
+      {needNote && <span className="err" role="alert">כתוב מה לתקן, הקלט או סמן על צילום</span>}
+      <AttachmentChips files={marked} onRemove={(i) => setMarked(marked.filter((_, j) => j !== i))} />
+      {drawing && <AnnotatorSheet source={drawing} onClose={() => setDrawing(null)} onDone={(file) => { setMarked((m) => [...m, file]); setDrawing(null); setNeedNote(false); }} />}
       <div className="row wrap">
+        <input ref={pick} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void startMarking({ kind: "file", file: f }); }} />
+        <button type="button" className="chip" disabled={marked.length >= MAX_FILES} onClick={() => pick.current?.click()}>צילום מסך עם סימון</button>
+        {shots.map((s) => (
+          <button key={s.id} type="button" className="chip" disabled={marked.length >= MAX_FILES} onClick={() => void startMarking({ kind: "shot", taskId, mediaId: s.id })}>
+            {s.name.includes("phone") ? "סמן על התוצר בנייד" : "סמן על התוצר במחשב"}
+          </button>
+        ))}
         <button type="button" className={`chip ${voice.state === "recording" ? "recording" : ""}`} disabled={!available || voice.state === "transcribing"} aria-pressed={voice.state === "recording"} onClick={voice.toggle}>
           {voice.state === "recording" ? `עצור (${clock(voice.seconds)})` : voice.state === "transcribing" ? "מתמלל…" : available ? "הקלטה" : "הקלטה (לא מותקן)"}
         </button>

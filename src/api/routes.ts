@@ -38,7 +38,7 @@ const VIEWS: Record<string, string> = {
 
 const createTaskBody = z.object({ project_id: z.number().int().positive(), description: z.string().trim().min(1).max(5000), flagged: z.boolean().optional(), hold: z.boolean().optional(), review_plan: z.boolean().optional(), when: z.enum(["now", "night", "quota"]).optional() });
 const editTaskBody = z.object({ title: z.string().trim().min(1).max(80).optional(), description: z.string().trim().min(1).max(5000).optional() }).refine((b) => b.title !== undefined || b.description !== undefined, "nothing to change");
-const followUpBody = z.object({ note: z.string().trim().min(1).max(5000) });
+const followUpBody = z.object({ note: z.string().trim().min(1).max(5000), hold: z.boolean().optional() });
 const continueBody = z.object({ note: z.string().trim().max(5000).optional() });
 const decisionBody = z.object({ decision: z.enum(["approve", "reject"]), note: z.string().max(5000).optional(), stash: z.boolean().optional() });
 
@@ -296,8 +296,9 @@ export function registerRoutes(app: FastifyInstance, db: Db, { tasks, driver, ac
   app.post<{ Params: { id: string } }>("/tasks/:id/followup", async (req, reply) => {
     const id = taskId(req.params.id);
     if (id === null) return reply.code(400).send({ error: "invalid_id" });
-    const task = tasks.createFollowUp(id, followUpBody.parse(req.body).note);
-    driver.start(task.id);
+    const body = followUpBody.parse(req.body);
+    const task = tasks.createFollowUp(id, body.note);
+    if (!body.hold) driver.start(task.id); // `hold`: the app attaches annotated screenshots first, then starts it
     return reply.code(201).send(oneTask(task.id));
   });
   app.post<{ Params: { id: string } }>("/tasks/:id/duplicate", async (req, reply) => {
